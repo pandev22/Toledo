@@ -1,0 +1,19 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:./heliactyl.db"
+}
+
+model heliactyl {
+  key        String  @id
+  value      String
+  created_at Int?    @default(dbgenerated("(strftime('%s', 'now'))"))
+}
+
+model keyv {
+  key        String  @id
+  value      String
+}

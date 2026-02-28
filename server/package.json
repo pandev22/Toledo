@@ -23,6 +23,7 @@
     "ioredis": "^5.4.1",
     "lru-cache": "^7.18.3",
     "nocache": "^4.0.0",
+    "node-cache": "^5.1.2",
     "pg": "^8.13.0",
     "qrcode": "^1.5.4",
     "speakeasy": "^2.0.0",
@@ -44,6 +45,8 @@
     "@babel/cli": "^7.23.9",
     "@babel/core": "^7.24.0",
     "@babel/plugin-transform-modules-commonjs": "^7.23.3",
-    "@babel/preset-env": "^7.24.0"
+    "@babel/preset-env": "^7.24.0",
+    "@prisma/client": "^5.22.0",
+    "prisma": "^5.22.0"
   }
 }

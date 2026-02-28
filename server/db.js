@@ -1,988 +1,229 @@
-/**
- *  Heliactyl Next database handler
- */
+const { PrismaClient } = require("@prisma/client");
 
-/**
- * @module HeliactylNextDB
- * @version 0.5.0
- * @description Multi-database adapter for Heliactyl Next - Supports SQLite and PostgreSQL (CockroachDB compatible)
- */
-
-const path = require('path');
-const winston = require('winston');
-const LRU = require('lru-cache');
-
-// Configure Winston logger
-const dbLogger = winston.createLogger({
-  format: winston.format.combine(
-    winston.format.timestamp(),
-    winston.format.json()
-  ),
-  transports: [
-    new winston.transports.File({ filename: 'logs/db.log' })
-  ]
-});
-
-/**
- * @class HeliactylDB
- * @description Main database class that handles all database operations with queuing and TTL support
- * @supports SQLite, PostgreSQL, CockroachDB
- */
 class HeliactylDB {
-  /**
-   * @constructor
-   * @param {string} dbPath - Database connection string (sqlite://path or postgresql://user:pass@host/db)
-   * @throws {Error} If database path is not provided or connection fails... 
-   */
   constructor(dbPath) {
-    if (!dbPath) {
-      throw new Error('Database path is required');
-    }
-
-    // Handle both string and object configs
-    if (typeof dbPath === 'object' && dbPath.url) {
-      this.dbPath = dbPath.url;
-    } else if (typeof dbPath === 'string') {
-      this.dbPath = dbPath;
-    } else {
-      throw new Error('Database path must be a string or an object with a url property');
-    }
-
-    this.isPostgres = this.dbPath.startsWith('postgresql://') || this.dbPath.startsWith('postgres://');
-    this.isSQLite = this.dbPath.startsWith('sqlite://') || (!this.isPostgres && !this.dbPath.includes('://'));
-
-    if (this.isSQLite) {
-      this.initSQLite();
-    } else if (this.isPostgres) {
-      this.initPostgreSQL();
-    } else {
-      throw new Error(`Unsupported database type: ${dbPath}. Use sqlite:// or postgresql://`);
-    }
-
-    this.namespace = 'heliactyl';
-    this.ttlSupport = false;
-    this.queue = [];
-    this.isProcessing = false;
-    this.processingLock = false; // Lock to prevent race conditions
-    this.totalOperationTime = 0;
-    this.operationCount = 0;
-    this.maxQueueSize = 10000; // Prevent unbounded queue growth
-    this.tableName = 'heliactyl'; // Default table name
-
-    // Initialize LRU cache for hot data
-    this.cache = new LRU({
-      max: 2500,
-      ttl: 1000 * 30, // 30s - fast refresh for multi-region consistency
-      updateAgeOnGet: true,
-      updateAgeOnHas: true
-    });
-
-    // Initialize the database table
-    this.initializeDatabase().catch(err => {
-      console.error('Failed to initialize database:', err);
-    });
-
-    // Log queue stats every 5 seconds
-    setInterval(() => this.logQueueStats(), 5000);
-
-    // Cleanup expired entries periodically if TTL is supported
-    if (this.ttlSupport) {
-      setInterval(() => this.cleanupExpired(), 60000);
-    }
+    this.namespace = "heliactyl";
+    this.prisma = new PrismaClient();
+    this.cache = new Map();
+    console.log("HeliactylDB initialized with Prisma");
   }
 
-  /**
-   * Initialize SQLite connection
-   * @private
-   */
-  initSQLite() {
-    const sqlite3 = require('sqlite3').verbose();
-    const resolvedPath = path.resolve(this.dbPath.replace('sqlite://', ''));
-    this.db = new sqlite3.Database(resolvedPath, (err) => {
-      if (err) {
-        throw new Error(`Failed to connect to SQLite database: ${err.message}`);
-      }
-    });
-    this.dbType = 'sqlite';
-    // Enable WAL mode for better concurrency
-    this.db.run('PRAGMA journal_mode = WAL');
-  }
-
-  /**
-   * Initialize PostgreSQL/CockroachDB connection
-   * @private
-   */
-  initPostgreSQL() {
-    const { Pool } = require('pg');
-    this.pool = new Pool({
-      connectionString: this.dbPath,
-      max: 20, // Maximum number of clients in the pool
-      idleTimeoutMillis: 30000,
-      connectionTimeoutMillis: 5000, // Higher for cross-region CockroachDB
-    });
-    this.dbType = 'postgresql';
-    
-    // Test connection
-    this.pool.query('SELECT NOW()', (err) => {
-      if (err) {
-        console.error('Failed to connect to PostgreSQL database:', err.message);
+  async get(key) {
+    const fullKey = `${this.namespace}:${key}`;
+    const cached = this.cache.get(fullKey);
+    if (cached) {
+      if (cached.expires && Date.now() > cached.expires) {
+        this.cache.delete(fullKey);
       } else {
-        console.log('Connected to PostgreSQL/CockroachDB');
+        return cached.value;
       }
-    });
-  }
+    }
 
-  /**
-   * @async
-   * @method initializeDatabase
-   * @description Initializes database tables and indexes
-   * @returns {Promise<void>}
-   */
-  async initializeDatabase() {
-    if (this.dbType === 'sqlite') {
-      return this.initializeSQLite();
-    } else {
-      return this.initializePostgreSQL();
+    try {
+      const result = await this.prisma.heliactyl.findUnique({
+        where: { key: fullKey },
+      });
+
+      if (!result) return undefined;
+
+      const parsed = JSON.parse(result.value);
+      
+      if (parsed.expires && Date.now() > parsed.expires) {
+        await this.delete(key);
+        return undefined;
+      }
+
+      this.cache.set(fullKey, parsed);
+      return parsed.value;
+    } catch (e) {
+      console.error(`DB Get Error [${key}]:`, e.message);
+      return undefined;
     }
   }
 
-  /**
-   * Initialize SQLite database
-   * @private
-   */
-  async initializeSQLite() {
-    return this.executeQuery(() => new Promise((resolve, reject) => {
-      // First check if keyv table exists
-      this.db.get("SELECT name FROM sqlite_master WHERE type='table' AND name='keyv'", (err, row) => {
-        if (err) {
-          reject(err);
-          return;
-        }
-
-        if (row) {
-          console.log('Using Heliactyl Next Legacy compatibility mode - Found existing keyv database');
-          this.tableName = 'keyv';
-          this.namespace = 'keyv';
-          resolve();
-          return;
-        }
-
-        // Create Heliactyl Next table if keyv doesn't exist
-        const createTableSQL = `
-          CREATE TABLE IF NOT EXISTS heliactyl (
-            [key] TEXT PRIMARY KEY,
-            value TEXT NOT NULL,
-            created_at INTEGER DEFAULT (strftime('%s', 'now'))
-          )`;
-
-        this.db.serialize(() => {
-          this.db.run('BEGIN TRANSACTION');
-          this.db.run(createTableSQL, (err) => {
-            if (err) {
-              this.db.run('ROLLBACK');
-              reject(err);
-              return;
-            }
-
-            this.db.run('CREATE INDEX IF NOT EXISTS idx_heliactyl_key ON heliactyl ([key])', (indexErr) => {
-              if (indexErr) {
-                this.db.run('ROLLBACK');
-                reject(indexErr);
-                return;
-              }
-
-              this.db.run('COMMIT', (commitErr) => {
-                if (commitErr) {
-                  reject(commitErr);
-                } else {
-                  resolve();
-                }
-              });
-            });
-          });
-        });
+  async getMany(keys) {
+    const fullKeys = keys.map(k => `${this.namespace}:${k}`);
+    const results = {};
+    
+    try {
+      const records = await this.prisma.heliactyl.findMany({
+        where: { key: { in: fullKeys } }
       });
-    }));
+
+      for (const record of records) {
+        const originalKey = record.key.replace(`${this.namespace}:`, "");
+        const parsed = JSON.parse(record.value);
+        
+        if (parsed.expires && Date.now() > parsed.expires) {
+          await this.delete(originalKey);
+        } else {
+          results[originalKey] = parsed.value;
+          this.cache.set(record.key, parsed);
+        }
+      }
+    } catch (e) {
+      console.error(`DB GetMany Error:`, e.message);
+    }
+    return results;
   }
 
-  /**
-   * Initialize PostgreSQL/CockroachDB database
-   * @private
-   */
-  async initializePostgreSQL() {
+  async set(key, value, ttl) {
+    const fullKey = `${this.namespace}:${key}`;
+    const data = {
+      value,
+      expires: ttl ? Date.now() + ttl : undefined
+    };
+
     try {
-      // Check if keyv table exists
-      const keyvCheck = await this.pool.query(
-        "SELECT table_name FROM information_schema.tables WHERE table_name = 'keyv'"
+      await this.prisma.heliactyl.upsert({
+        where: { key: fullKey },
+        update: { value: JSON.stringify(data) },
+        create: { key: fullKey, value: JSON.stringify(data) }
+      });
+      this.cache.set(fullKey, data);
+    } catch (e) {
+      console.error(`DB Set Error [${key}]:`, e.message);
+    }
+  }
+
+  async delete(key) {
+    const fullKey = `${this.namespace}:${key}`;
+    try {
+      await this.prisma.heliactyl.delete({ where: { key: fullKey } });
+    } catch (e) {
+      // Ignore if not found
+    }
+    this.cache.delete(fullKey);
+  }
+
+  async clear() {
+    try {
+      await this.prisma.heliactyl.deleteMany({
+        where: { key: { startsWith: `${this.namespace}:` } }
+      });
+      this.cache.clear();
+    } catch (e) {
+      console.error(`DB Clear Error:`, e.message);
+    }
+  }
+
+  async has(key) {
+    const val = await this.get(key);
+    return val !== undefined;
+  }
+
+  async getAll() {
+    const results = {};
+    try {
+      const records = await this.prisma.heliactyl.findMany({
+        where: { key: { startsWith: `${this.namespace}:` } }
+      });
+
+      for (const record of records) {
+        const originalKey = record.key.replace(`${this.namespace}:`, "");
+        const parsed = JSON.parse(record.value);
+        
+        if (parsed.expires && Date.now() > parsed.expires) {
+          await this.delete(originalKey);
+        } else {
+          results[originalKey] = parsed.value;
+          this.cache.set(record.key, parsed);
+        }
+      }
+    } catch (e) {
+      console.error(`DB GetAll Error:`, e.message);
+    }
+    return results;
+  }
+
+  async search(pattern) {
+    try {
+      const records = await this.prisma.heliactyl.findMany({
+        where: { key: { startsWith: `${this.namespace}:` } },
+        select: { key: true }
+      });
+      
+      // Simple regex conversion for SQL LIKE matching
+      const regexPattern = new RegExp("^" + pattern.replace(/%/g, ".*") + "$");
+      
+      return records
+        .map(r => r.key.replace(`${this.namespace}:`, ""))
+        .filter(k => regexPattern.test(k));
+    } catch (e) {
+      console.error(`DB Search Error:`, e.message);
+      return [];
+    }
+  }
+
+  async setMultiple(entries, ttl) {
+    const transactions = [];
+    
+    for (const [key, value] of Object.entries(entries)) {
+      const fullKey = `${this.namespace}:${key}`;
+      const data = {
+        value,
+        expires: ttl ? Date.now() + ttl : undefined
+      };
+      
+      transactions.push(
+        this.prisma.heliactyl.upsert({
+          where: { key: fullKey },
+          update: { value: JSON.stringify(data) },
+          create: { key: fullKey, value: JSON.stringify(data) }
+        })
       );
       
-      if (keyvCheck.rows.length > 0) {
-        console.log('Using Heliactyl Next Legacy compatibility mode - Found existing keyv database');
-        this.tableName = 'keyv';
-        this.namespace = 'keyv';
-        return;
-      }
-
-      // Create table for PostgreSQL/CockroachDB
-      const createTableSQL = `
-        CREATE TABLE IF NOT EXISTS heliactyl (
-          key VARCHAR(255) PRIMARY KEY,
-          value TEXT NOT NULL,
-          created_at INTEGER DEFAULT (EXTRACT(EPOCH FROM NOW()))
-        )`;
-      
-      await this.pool.query(createTableSQL);
-      
-      // Create index
-      await this.pool.query('CREATE INDEX IF NOT EXISTS idx_heliactyl_key ON heliactyl (key)');
-      
-      console.log('PostgreSQL/CockroachDB table initialized successfully');
-    } catch (err) {
-      console.error('Failed to initialize PostgreSQL database:', err);
-      throw err;
+      this.cache.set(fullKey, data);
     }
-  }
-
-  /**
-   * @async
-   * @method executeQuery
-   * @description Executes a database operation with queuing and timeout
-   * @param {Function} operation - Database operation to execute
-   * @returns {Promise<any>} Result of the operation
-   * @throws {Error} If queue is full or operation times out
-   */
-  async executeQuery(operation) {
-    if (this.queue.length >= this.maxQueueSize) {
-      throw new Error('Database queue is full');
-    }
-
-    return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        reject(new Error('Database operation timed out'));
-      }, 30000); // 30 second timeout
-
-      this.queue.push({
-        operation,
-        resolve: (result) => {
-          clearTimeout(timeout);
-          resolve(result);
-        },
-        reject: (error) => {
-          clearTimeout(timeout);
-          reject(error);
-        }
-      });
-
-      this.processQueue();
-    });
-  }
-
-  /**
-   * @async
-   * @method processQueue
-   * @description Processes the next operation in the queue
-   * @private
-   */
-  async processQueue() {
-    // Use a lock to prevent race conditions
-    if (this.processingLock || this.queue.length === 0) return;
-    
-    this.processingLock = true;
-    this.isProcessing = true;
-    
-    const { operation, resolve, reject } = this.queue.shift();
-    const startTime = Date.now();
 
     try {
-      const result = await operation();
-      const operationTime = Date.now() - startTime;
-      this.updateStats(operationTime);
-
-      // Log successful transaction
-      dbLogger.info('Database transaction completed', {
-        operationTime,
-        queueLength: this.queue.length
-      });
-
-      resolve(result);
-    } catch (error) {
-      // Log failed transaction
-      dbLogger.error('Database transaction failed', {
-        error: error.message,
-        queueLength: this.queue.length
-      });
-
-      console.error('Database operation failed:', error);
-      reject(error);
-    } finally {
-      this.isProcessing = false;
-      this.processingLock = false;
-      
-      // Process next item if queue not empty
-      if (this.queue.length > 0) {
-        setImmediate(() => this.processQueue());
-      }
+      await this.prisma.$transaction(transactions);
+    } catch (e) {
+      console.error(`DB SetMultiple Error:`, e.message);
     }
   }
 
-  /**
-   * @method updateStats
-   * @description Updates operation statistics
-   * @param {number} operationTime - Time taken for operation in milliseconds
-   * @private
-   */
-  updateStats(operationTime) {
-    this.totalOperationTime += operationTime;
-    this.operationCount++;
-
-    // Reset stats periodically to prevent overflow
-    if (this.operationCount > 1000000) {
-      this.totalOperationTime = operationTime;
-      this.operationCount = 1;
-    }
-  }
-
-  /**
-   * @method logQueueStats
-   * @description Logs queue statistics
-   * @private
-   */
-  logQueueStats() {
-    const avgOperationTime = this.operationCount > 0 ? this.totalOperationTime / this.operationCount : 0;
-    dbLogger.info('Queue statistics', {
-      queueLength: this.queue.length,
-      averageOperationTime: avgOperationTime.toFixed(2)
-    });
-  }
-
-  /**
-   * @async
-   * @method cleanupExpired
-   * @description Removes expired entries from database
-   * @returns {Promise<void>}
-   */
-  async cleanupExpired() {
-    if (!this.ttlSupport) return;
-
-    if (this.dbType === 'sqlite') {
-      return this.executeQuery(() => new Promise((resolve, reject) => {
-        this.db.run(`DELETE FROM ${this.tableName} WHERE json_extract(value, "$.expires") < ?`, [Date.now()], (err) => {
-          if (err) reject(err);
-          else resolve();
-        });
-      }));
-    } else {
-      // PostgreSQL - Use regex to extract expires field from JSON
-      try {
-        await this.pool.query(
-          `DELETE FROM ${this.tableName} WHERE (value::jsonb->>'expires')::bigint < $1`,
-          [Date.now()]
-        );
-      } catch (err) {
-        console.error('Failed to cleanup expired entries:', err);
-      }
-    }
-  }
-
-  /**
-   * @async
-   * @method get
-   * @description Retrieves a value by key
-   * @param {string} key - Key to retrieve
-   * @returns {Promise<any>} Retrieved value
-   * @throws {Error} If key is not provided or value parsing fails
-   */
-  async get(key) {
-    if (!key) throw new Error('Key is required');
-
-    const fullKey = `${this.namespace}:${key}`;
-
-    // Read-through cache: check LRU before hitting DB
-    const cached = this.cache.get(fullKey);
-    if (cached !== undefined) return cached;
-
-    let value;
-
-    if (this.dbType === 'sqlite') {
-      value = await this.executeQuery(() => new Promise((resolve, reject) => {
-        this.db.get(`SELECT value FROM ${this.tableName} WHERE key = ?`, [fullKey], (err, row) => {
-          if (err) {
-            reject(err);
-          } else {
-            if (row) {
-              try {
-                const parsed = JSON.parse(row.value);
-                if (this.ttlSupport && parsed.expires && parsed.expires < Date.now()) {
-                  this.delete(key).catch(console.error);
-                  resolve(undefined);
-                } else {
-                  resolve(parsed.value);
-                }
-              } catch (e) {
-                reject(new Error(`Failed to parse stored value: ${e.message}`));
-              }
-            } else {
-              resolve(undefined);
-            }
-          }
-        });
-      }));
-    } else {
-      // PostgreSQL/CockroachDB
-      try {
-        const result = await this.pool.query(
-          `SELECT value FROM ${this.tableName} WHERE key = $1`,
-          [fullKey]
-        );
-
-        if (result.rows.length > 0) {
-          const parsed = JSON.parse(result.rows[0].value);
-          if (this.ttlSupport && parsed.expires && parsed.expires < Date.now()) {
-            await this.delete(key);
-            value = undefined;
-          } else {
-            value = parsed.value;
-          }
-        }
-      } catch (err) {
-        throw new Error(`Failed to get value: ${err.message}`);
-      }
-    }
-
-    // Populate cache on DB hit
-    if (value !== undefined && value !== null) {
-      this.cache.set(fullKey, value);
-    }
-
-    return value;
-  }
-
-  /**
-   * @async
-   * @method getMany
-   * @description Retrieves multiple values by keys in a single query
-   * @param {string[]} keys - Array of keys to retrieve
-   * @returns {Promise<Object>} Object mapping keys to their values
-   */
-  async getMany(keys) {
-    if (!keys || !keys.length) return {};
-
-    const result = {};
-    const missKeys = []; // Keys not found in cache
-
-    // Check LRU cache first for each key
-    for (const key of keys) {
-      const fullKey = `${this.namespace}:${key}`;
-      const cached = this.cache.get(fullKey);
-      if (cached !== undefined) {
-        result[key] = cached;
-      } else {
-        missKeys.push(key);
-      }
-    }
-
-    // All keys served from cache — skip DB entirely
-    if (missKeys.length === 0) {
-      for (const key of keys) {
-        if (!(key in result)) result[key] = undefined;
-      }
-      return result;
-    }
-
-    const missFullKeys = missKeys.map(k => `${this.namespace}:${k}`);
-
-    if (this.dbType === 'sqlite') {
-      await new Promise((resolve, reject) => {
-        const placeholders = missFullKeys.map(() => '?').join(',');
-        this.db.all(
-          `SELECT key, value FROM ${this.tableName} WHERE key IN (${placeholders})`,
-          missFullKeys,
-          (err, rows) => {
-            if (err) return reject(err);
-            for (const row of (rows || [])) {
-              try {
-                const parsed = JSON.parse(row.value);
-                const originalKey = row.key.replace(`${this.namespace}:`, '');
-                if (this.ttlSupport && parsed.expires && parsed.expires < Date.now()) {
-                  this.delete(originalKey).catch(console.error);
-                } else {
-                  result[originalKey] = parsed.value;
-                  // Populate cache on DB hit
-                  this.cache.set(row.key, parsed.value);
-                }
-              } catch (e) { /* skip unparseable */ }
-            }
-            resolve();
-          }
-        );
-      });
-    } else {
-      // PostgreSQL/CockroachDB - single query for cache misses only
-      try {
-        const placeholders = missFullKeys.map((_, i) => `$${i + 1}`).join(',');
-        const res = await this.pool.query(
-          `SELECT key, value FROM ${this.tableName} WHERE key IN (${placeholders})`,
-          missFullKeys
-        );
-        for (const row of res.rows) {
-          try {
-            const parsed = JSON.parse(row.value);
-            const originalKey = row.key.replace(`${this.namespace}:`, '');
-            if (this.ttlSupport && parsed.expires && parsed.expires < Date.now()) {
-              this.delete(originalKey).catch(console.error);
-            } else {
-              result[originalKey] = parsed.value;
-              // Populate cache on DB hit
-              this.cache.set(row.key, parsed.value);
-            }
-          } catch (e) { /* skip unparseable */ }
-        }
-      } catch (err) {
-        throw new Error(`Failed to getMany: ${err.message}`);
-      }
-    }
-
-    // Fill missing keys with undefined
-    for (const key of keys) {
-      if (!(key in result)) result[key] = undefined;
-    }
-    return result;
-  }
-
-  /**
-   * @async
-   * @method set
-   * @description Sets a value with optional TTL
-   * @param {string} key - Key to set
-   * @param {any} value - Value to store
-   * @param {number} [ttl] - Time-to-live in milliseconds
-   * @returns {Promise<void>}
-   * @throws {Error} If key is not provided
-   */
-  async set(key, value, ttl) {
-    if (!key) throw new Error('Key is required');
-
-    const fullKey = `${this.namespace}:${key}`;
-    const expires = this.ttlSupport && ttl ? Date.now() + ttl : undefined;
-    const data = JSON.stringify({
-      value,
-      expires
-    });
-
-    if (this.dbType === 'sqlite') {
-      await this.executeQuery(() => new Promise((resolve, reject) => {
-        this.db.run(`INSERT OR REPLACE INTO ${this.tableName} (key, value) VALUES (?, ?)`, [fullKey, data], (err) => {
-          if (err) {
-            reject(err);
-          } else {
-            resolve();
-          }
-        });
-      }));
-    } else {
-      // PostgreSQL/CockroachDB - UPSERT syntax
-      try {
-        await this.pool.query(
-          `INSERT INTO ${this.tableName} (key, value) VALUES ($1, $2)
-           ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
-          [fullKey, data]
-        );
-      } catch (err) {
-        throw new Error(`Failed to set value: ${err.message}`);
-      }
-    }
-
-    // Write-through: update cache after successful DB write
-    this.cache.set(fullKey, value);
-  }
-
-  /**
-   * @async
-   * @method delete
-   * @description Deletes a value by key
-   * @param {string} key - Key to delete
-   * @returns {Promise<void>}
-   * @throws {Error} If key is not provided
-   */
-  async delete(key) {
-    if (!key) throw new Error('Key is required');
-
-    const fullKey = `${this.namespace}:${key}`;
-
-    // Invalidate cache immediately
-    this.cache.delete(fullKey);
-
-    if (this.dbType === 'sqlite') {
-      return this.executeQuery(() => new Promise((resolve, reject) => {
-        this.db.run(`DELETE FROM ${this.tableName} WHERE key = ?`, [fullKey], (err) => {
-          if (err) {
-            reject(err);
-          } else {
-            resolve();
-          }
-        });
-      }));
-    } else {
-      try {
-        await this.pool.query(`DELETE FROM ${this.tableName} WHERE key = $1`, [fullKey]);
-      } catch (err) {
-        throw new Error(`Failed to delete value: ${err.message}`);
-      }
-    }
-  }
-
-  /**
-   * @async
-   * @method clear
-   * @description Clears all values in the current namespace
-   * @returns {Promise<void>}
-   */
-  async clear() {
-    const pattern = `${this.namespace}:%`;
-
-    // Flush entire LRU cache — all keys belong to this namespace
-    this.cache.clear();
-
-    if (this.dbType === 'sqlite') {
-      return this.executeQuery(() => new Promise((resolve, reject) => {
-        this.db.run(`DELETE FROM ${this.tableName} WHERE key LIKE ?`, [pattern], (err) => {
-          if (err) {
-            reject(err);
-          } else {
-            resolve();
-          }
-        });
-      }));
-    } else {
-      try {
-        await this.pool.query(`DELETE FROM ${this.tableName} WHERE key LIKE $1`, [pattern]);
-      } catch (err) {
-        throw new Error(`Failed to clear values: ${err.message}`);
-      }
-    }
-  }
-
-  /**
-   * @async
-   * @method has
-   * @description Checks if a key exists
-   * @param {string} key - Key to check
-   * @returns {Promise<boolean>} True if key exists
-   * @throws {Error} If key is not provided
-   */
-  async has(key) {
-    if (!key) throw new Error('Key is required');
-
-    const fullKey = `${this.namespace}:${key}`;
-
-    if (this.dbType === 'sqlite') {
-      return this.executeQuery(() => new Promise((resolve, reject) => {
-        this.db.get(`SELECT 1 FROM ${this.tableName} WHERE key = ?`, [fullKey], (err, row) => {
-          if (err) {
-            reject(err);
-          } else {
-            resolve(!!row);
-          }
-        });
-      }));
-    } else {
-      try {
-        const result = await this.pool.query(`SELECT 1 FROM ${this.tableName} WHERE key = $1`, [fullKey]);
-        return result.rows.length > 0;
-      } catch (err) {
-        throw new Error(`Failed to check key: ${err.message}`);
-      }
-    }
-  }
-
-  /**
-   * @async
-   * @method close
-   * @description Closes database connection
-   * @returns {Promise<void>}
-   */
-  async close() {
-    if (this.dbType === 'sqlite') {
-      return new Promise((resolve, reject) => {
-        this.db.close((err) => {
-          if (err) reject(err);
-          else resolve();
-        });
-      });
-    } else {
-      await this.pool.end();
-    }
-  }
-
-  /**
-   * @async
-   * @method getCached
-   * @description Retrieves a value by key with caching
-   * @param {string} key - Key to retrieve
-   * @param {number} ttl - Cache TTL in milliseconds
-   * @returns {Promise<any>} Retrieved value
-   */
-  async getCached(key, ttl = 300000) {
-    const cacheKey = `${this.namespace}:${key}`;
-    
-    // Check cache first
-    const cached = this.cache.get(cacheKey);
-    if (cached !== undefined) {
-      return cached;
-    }
-    
-    // Fetch from database
-    const value = await this.get(key);
-    
-    // Store in cache if value exists
-    if (value !== undefined && value !== null) {
-      this.cache.set(cacheKey, value, { ttl });
-    }
-    
-    return value;
-  }
-
-  /**
-   * @async
-   * @method setCached
-   * @description Sets a value with cache invalidation
-   * @param {string} key - Key to set
-   * @param {any} value - Value to store
-   * @param {number} ttl - Cache TTL in milliseconds
-   * @returns {Promise<void>}
-   */
-  async setCached(key, value, ttl = 300000) {
-    const cacheKey = `${this.namespace}:${key}`;
-    
-    // Update database
-    await this.set(key, value);
-    
-    // Update cache
-    this.cache.set(cacheKey, value, { ttl });
-  }
-
-  /**
-   * @method clearCache
-   * @description Clears cache for a specific key or pattern
-   * @param {string} pattern - Key pattern to clear (supports * wildcard)
-   * @returns {void}
-   */
-  clearCache(pattern) {
-    if (pattern.includes('*')) {
-      // Convert pattern to regex
-      const regex = new RegExp('^' + pattern.replace(/\*/g, '.*') + '$');
-      for (const key of this.cache.keys()) {
-        if (regex.test(key)) {
-          this.cache.delete(key);
-        }
-      }
-    } else {
-      this.cache.delete(`${this.namespace}:${pattern}`);
-    }
-  }
-
-  /**
-   * @async
-   * @method getAll
-   * @description Retrieves all key-value pairs in the current namespace
-   * @returns {Promise<Object>} Object containing all key-value pairs
-   */
-  async getAll() {
-    const pattern = `${this.namespace}:%`;
-
-    if (this.dbType === 'sqlite') {
-      return this.executeQuery(() => new Promise((resolve, reject) => {
-        this.db.all(`SELECT key, value FROM ${this.tableName} WHERE key LIKE ?`, [pattern], (err, rows) => {
-          if (err) {
-            reject(err);
-          } else {
-            const result = {};
-            rows.forEach(row => {
-              const key = row.key.replace(`${this.namespace}:`, '');
-              try {
-                const parsed = JSON.parse(row.value);
-                if (!(this.ttlSupport && parsed.expires && parsed.expires < Date.now())) {
-                  result[key] = parsed.value;
-                }
-              } catch (e) {
-                console.error(`Failed to parse value for key ${key}:`, e);
-              }
-            });
-            resolve(result);
-          }
-        });
-      }));
-    } else {
-      try {
-        const result = await this.pool.query(`SELECT key, value FROM ${this.tableName} WHERE key LIKE $1`, [pattern]);
-        const output = {};
-        result.rows.forEach(row => {
-          const key = row.key.replace(`${this.namespace}:`, '');
-          try {
-            const parsed = JSON.parse(row.value);
-            if (!(this.ttlSupport && parsed.expires && parsed.expires < Date.now())) {
-              output[key] = parsed.value;
-            }
-          } catch (e) {
-            console.error(`Failed to parse value for key ${key}:`, e);
-          }
-        });
-        return output;
-      } catch (err) {
-        throw new Error(`Failed to get all values: ${err.message}`);
-      }
-    }
-  }
-
-  /**
-   * @async
-   * @method increment
-   * @description Increments a numeric value by the specified amount
-   * @param {string} key - Key to increment
-   * @param {number} [amount=1] - Amount to increment by
-   * @returns {Promise<number>} New value after increment
-   */
   async increment(key, amount = 1) {
-    const currentValue = await this.get(key) || 0;
-    if (typeof currentValue !== 'number') {
-      throw new Error('Value must be a number to increment');
-    }
-    const newValue = currentValue + amount;
+    const current = await this.get(key) || 0;
+    const newValue = Number(current) + amount;
     await this.set(key, newValue);
     return newValue;
   }
 
-  /**
-   * @async
-   * @method decrement
-   * @description Decrements a numeric value by the specified amount
-   * @param {string} key - Key to decrement
-   * @param {number} [amount=1] - Amount to decrement by
-   * @returns {Promise<number>} New value after decrement
-   */
   async decrement(key, amount = 1) {
-    return this.increment(key, -amount);
+    const current = await this.get(key) || 0;
+    const newValue = Number(current) - amount;
+    await this.set(key, newValue);
+    return newValue;
   }
 
-  /**
-   * @async
-   * @method search
-   * @description Searches for keys matching a pattern
-   * @param {string} pattern - Search pattern (SQL LIKE pattern)
-   * @returns {Promise<string[]>} Array of matching keys
-   */
-  async search(pattern) {
-    const fullPattern = `${this.namespace}:${pattern}`;
+  async getCached(key, ttl) {
+    return this.get(key);
+  }
 
-    if (this.dbType === 'sqlite') {
-      return this.executeQuery(() => new Promise((resolve, reject) => {
-        this.db.all(
-          `SELECT key FROM ${this.tableName} WHERE key LIKE ?`,
-          [fullPattern],
-          (err, rows) => {
-            if (err) {
-              reject(err);
-            } else {
-              resolve(rows.map(row => row.key.replace(`${this.namespace}:`, '')));
-            }
-          }
-        );
-      }));
-    } else {
-      try {
-        const result = await this.pool.query(
-          `SELECT key FROM ${this.tableName} WHERE key LIKE $1`,
-          [fullPattern]
-        );
-        return result.rows.map(row => row.key.replace(`${this.namespace}:`, ''));
-      } catch (err) {
-        throw new Error(`Failed to search keys: ${err.message}`);
-      }
+  async setCached(key, value, ttl) {
+    return this.set(key, value, ttl);
+  }
+
+  clearCache(pattern) {
+    if (!pattern) {
+      this.cache.clear();
+      return;
     }
-  }
-
-  /**
-   * @async
-   * @method setMultiple
-   * @description Sets multiple key-value pairs at once
-   * @param {Object} entries - Object containing key-value pairs to set
-   * @param {number} [ttl] - Optional TTL for all entries
-   * @returns {Promise<void>}
-   */
-  async setMultiple(entries, ttl) {
-    const entriesList = Object.entries(entries);
     
-    if (this.dbType === 'sqlite') {
-      return this.executeQuery(() => new Promise((resolve, reject) => {
-        const stmt = this.db.prepare(`INSERT OR REPLACE INTO ${this.tableName} (key, value) VALUES (?, ?)`);
-
-        this.db.serialize(() => {
-          this.db.run('BEGIN TRANSACTION');
-
-          try {
-            for (const [key, value] of entriesList) {
-              const data = JSON.stringify({
-                value,
-                expires: this.ttlSupport && ttl ? Date.now() + ttl : undefined
-              });
-              stmt.run(`${this.namespace}:${key}`, data);
-            }
-
-            this.db.run('COMMIT', (err) => {
-              if (err) reject(err);
-              else {
-                // Populate cache for all written entries
-                for (const [key, value] of entriesList) {
-                  this.cache.set(`${this.namespace}:${key}`, value);
-                }
-                resolve();
-              }
-            });
-          } catch (err) {
-            this.db.run('ROLLBACK');
-            reject(err);
-          } finally {
-            stmt.finalize();
-          }
-        });
-      }));
-    } else {
-      // PostgreSQL/CockroachDB - Use batch insert with ON CONFLICT
-      try {
-        const client = await this.pool.connect();
-        try {
-          await client.query('BEGIN');
-          
-          for (const [key, value] of entriesList) {
-            const fullKey = `${this.namespace}:${key}`;
-            const data = JSON.stringify({
-              value,
-              expires: this.ttlSupport && ttl ? Date.now() + ttl : undefined
-            });
-            await client.query(
-              `INSERT INTO ${this.tableName} (key, value) VALUES ($1, $2)
-               ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
-              [fullKey, data]
-            );
-          }
-          
-          await client.query('COMMIT');
-        } catch (err) {
-          await client.query('ROLLBACK');
-          throw err;
-        } finally {
-          client.release();
-        }
-
-        // Populate cache for all written entries
-        for (const [key, value] of entriesList) {
-          this.cache.set(`${this.namespace}:${key}`, value);
-        }
-      } catch (err) {
-        throw new Error(`Failed to set multiple values: ${err.message}`);
+    const regexPattern = new RegExp("^" + pattern.replace(/%/g, ".*") + "$");
+    for (const [key, val] of this.cache.entries()) {
+      const originalKey = key.replace(`${this.namespace}:`, "");
+      if (regexPattern.test(originalKey)) {
+        this.cache.delete(key);
       }
     }
+  }
+
+  async close() {
+    await this.prisma.$disconnect();
   }
 }
 
 module.exports = HeliactylDB;
+

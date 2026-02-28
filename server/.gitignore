@@ -11,3 +11,5 @@ sessions.db
 backups
 pnpm-lock.yaml
 pnpm-workspace.yaml
+
+/generated/prisma
