@@ -176,7 +176,7 @@ class BillingManager {
       bundle: bundleId,
       name: bundle.name,
       resources: bundle.resources
-    }, bundle.price_usd);
+    }, -bundle.price_usd);
 
     return true;
   }
@@ -381,7 +381,7 @@ module.exports.load = async function (app, db) {
         {
           description: `Bought ${package.amount} Coins`
         },
-        package.price_usd
+        -package.price_usd
       );
 
       await billingManager.addCoins(userId, package.amount);
@@ -438,7 +438,7 @@ module.exports.load = async function (app, db) {
       await billingManager.addCoins(recipientId, amount);
 
       // Log transactions
-      await billingManager.logTransaction(userId, 'transfer_sent', { to: recipientId }, amount);
+      await billingManager.logTransaction(userId, 'transfer_sent', { to: recipientId }, -amount);
       await billingManager.logTransaction(recipientId, 'transfer_received', { from: userId }, amount);
 
       res.json({
