@@ -88,100 +88,138 @@ class BillingManager {
   }
 
   async isSessionProcessed(sessionId) {
-    return await this.db.get(`processed-session-${sessionId}`);
-  }
-
-  async markSessionProcessed(sessionId) {
-    await this.db.set(`processed-session-${sessionId}`, true);
+    return await this.db.transaction.findUnique({
+      where: { externalId: sessionId }
+    });
   }
 
   async getCreditBalance(userId) {
-    return parseFloat(await this.db.get(`credit-${userId}`)) || 0;
+    const user = await this.db.user.findUnique({
+      where: { id: userId },
+      select: { creditUsd: true }
+    });
+    return user?.creditUsd ?? 0;
   }
 
   async addCreditBalance(userId, amount) {
-    const currentBalance = await this.getCreditBalance(userId);
-    await this.db.set(`credit-${userId}`, (currentBalance + amount).toFixed(2));
-    return currentBalance + amount;
+    const user = await this.db.user.update({
+      where: { id: userId },
+      data: { creditUsd: { increment: parseFloat(amount) } }
+    });
+    return user.creditUsd;
   }
 
   async getCoinBalance(userId) {
-    return parseInt(await this.db.get(`coins-${userId}`)) || 0;
+    const user = await this.db.user.findUnique({
+      where: { id: userId },
+      select: { coins: true }
+    });
+    return user?.coins ?? 0;
   }
 
   async addCoins(userId, amount) {
-    const currentCoins = await this.getCoinBalance(userId);
-    await this.db.set(`coins-${userId}`, currentCoins + amount);
-    return currentCoins + amount;
+    const user = await this.db.user.update({
+      where: { id: userId },
+      data: { coins: { increment: parseInt(amount) } }
+    });
+    return user.coins;
   }
 
   async removeCoins(userId, amount) {
-    const currentCoins = await this.getCoinBalance(userId);
-    if (currentCoins < amount) throw new Error('Insufficient funds');
-    await this.db.set(`coins-${userId}`, currentCoins - amount);
-    return currentCoins - amount;
+    const user = await this.db.user.findUnique({
+      where: { id: userId },
+      select: { coins: true }
+    });
+    if (!user || user.coins < amount) throw new Error('Insufficient funds');
+
+    const updatedUser = await this.db.user.update({
+      where: { id: userId },
+      data: { coins: { decrement: parseInt(amount) } }
+    });
+    return updatedUser.coins;
   }
 
   async getTransactionHistory(userId) {
-    return await this.db.get(`transactions-${userId}`) || [];
+    return await this.db.transaction.findMany({
+      where: { userId },
+      orderBy: { createdAt: 'desc' }
+    });
   }
 
-  async logTransaction(userId, type, details, amount) {
-    const transaction = {
-      id: `txn_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-      type,
-      details,
-      amount,
-      timestamp: new Date().toISOString()
-    };
+  async logTransaction(userId, type, details, amount, externalId = null) {
+    // Schema uses Int for amount. Convert USD to cents if applicable, else use as is.
+    const amountVal = (type === 'credit_purchase' || type === 'credit_spend')
+      ? Math.round(amount * 100)
+      : Math.round(amount);
 
-    const history = await this.getTransactionHistory(userId);
-    history.push(transaction);
-    await this.db.set(`transactions-${userId}`, history);
-    return transaction;
+    return await this.db.transaction.create({
+      data: {
+        userId,
+        type,
+        amount: amountVal,
+        description: details.description || details.name || type,
+        details: JSON.stringify(details),
+        externalId: externalId
+      }
+    });
   }
 
   async addResources(userId, resources) {
-    const extra = await this.db.get(`extra-${userId}`) || {
-      ram: 0,
-      disk: 0,
-      cpu: 0,
-      servers: 0
+    const user = await this.db.user.update({
+      where: { id: userId },
+      data: {
+        extraRam: { increment: resources.ram || 0 },
+        extraDisk: { increment: resources.disk || 0 },
+        extraCpu: { increment: resources.cpu || 0 },
+        extraServers: { increment: resources.servers || 0 }
+      }
+    });
+
+    return {
+      ram: user.extraRam,
+      disk: user.extraDisk,
+      cpu: user.extraCpu,
+      servers: user.extraServers
     };
-
-    // Add resources
-    extra.ram += resources.ram || 0;
-    extra.disk += resources.disk || 0;
-    extra.cpu += resources.cpu || 0;
-    extra.servers += resources.servers || 0;
-
-    await this.db.set(`extra-${userId}`, extra);
-    return extra;
   }
 
   async applyBundle(userId, bundleId) {
     const bundle = BUNDLES[bundleId];
     if (!bundle) throw new Error('Invalid bundle ID');
 
-    // Add resources from bundle
-    await this.addResources(userId, bundle.resources);
+    // Use a transaction for the entire bundle application
+    await this.db.$transaction(async (tx) => {
+      // Add resources
+      await tx.user.update({
+        where: { id: userId },
+        data: {
+          extraRam: { increment: bundle.resources.ram || 0 },
+          extraDisk: { increment: bundle.resources.disk || 0 },
+          extraCpu: { increment: bundle.resources.cpu || 0 },
+          extraServers: { increment: bundle.resources.servers || 0 },
+          coins: { increment: bundle.resources.coins || 0 }
+        }
+      });
 
-    // Add bonus coins if included
-    if (bundle.resources.coins) {
-      await this.addCoins(userId, bundle.resources.coins);
-    }
-
-    // Log the bundle purchase
-    await this.logTransaction(userId, 'bundle_purchase', {
-      bundle: bundleId,
-      name: bundle.name,
-      resources: bundle.resources
-    }, bundle.price_usd);
+      // Log the bundle purchase
+      await tx.transaction.create({
+        data: {
+          userId,
+          type: 'purchase',
+          amount: Math.round(bundle.price_usd * 100), // Storing USD cents
+          description: `Bundle Purchase: ${bundle.name}`,
+          details: JSON.stringify({
+            bundle: bundleId,
+            name: bundle.name,
+            resources: bundle.resources
+          })
+        }
+      });
+    });
 
     return true;
   }
 
-  // Add new method for checkout sessions
   async createCheckoutSession(userId, amount_usd, userEmail) {
     const session = await getStripe().checkout.sessions.create({
       customer_email: userEmail,
@@ -275,7 +313,7 @@ module.exports.load = async function (app, db) {
     try {
       const { session_id } = req.query;
 
-      // Check if session was already processed
+      // Check if session was already processed (via externalId on Transaction)
       const isProcessed = await billingManager.isSessionProcessed(session_id);
       if (isProcessed) {
         return res.status(400).json({ error: 'This payment has already been processed' });
@@ -292,9 +330,6 @@ module.exports.load = async function (app, db) {
         return res.status(403).json({ error: 'Unauthorized payment session' });
       }
 
-      // Mark session as processed before applying credit
-      await billingManager.markSessionProcessed(session_id);
-
       const amountUsd = parseFloat(session.metadata.amount_usd);
 
       // Fetch Invoice or Receipt URL
@@ -307,7 +342,6 @@ module.exports.load = async function (app, db) {
           invoiceUrl = invoice.hosted_invoice_url;
           invoicePdf = invoice.invoice_pdf;
         } else if (session.payment_intent) {
-          // Fallback to receipt if no invoice (legacy or error)
           const paymentIntent = await getStripe().paymentIntents.retrieve(session.payment_intent);
           if (paymentIntent.latest_charge) {
             const charge = await getStripe().charges.retrieve(paymentIntent.latest_charge);
@@ -318,21 +352,35 @@ module.exports.load = async function (app, db) {
         console.error('Failed to retrieve invoice details:', err);
       }
 
-      // Add credit to user's balance
-      await billingManager.addCreditBalance(req.session.userinfo.id, amountUsd);
+      // Add credit and log transaction atomically
+      await db.$transaction(async (tx) => {
+        // Double check within transaction
+        const alreadyProcessed = await tx.transaction.findUnique({
+          where: { externalId: session_id }
+        });
+        if (alreadyProcessed) throw new Error('ALREADY_PROCESSED');
 
-      // Log the credit purchase
-      await billingManager.logTransaction(
-        req.session.userinfo.id,
-        'credit_purchase',
-        {
-          checkout_session: session_id,
-          amount_usd: amountUsd,
-          invoice_url: invoiceUrl,
-          invoice_pdf: invoicePdf
-        },
-        amountUsd
-      );
+        await tx.user.update({
+          where: { id: req.session.userinfo.id },
+          data: { creditUsd: { increment: amountUsd } }
+        });
+
+        await tx.transaction.create({
+          data: {
+            userId: req.session.userinfo.id,
+            type: 'purchase',
+            amount: Math.round(amountUsd * 100),
+            description: 'Credit Purchase via Stripe',
+            details: JSON.stringify({
+              checkout_session: session_id,
+              amount_usd: amountUsd,
+              invoice_url: invoiceUrl,
+              invoice_pdf: invoicePdf
+            }),
+            externalId: session_id
+          }
+        });
+      });
 
       // Log the successful payment
       log('payment_success',
@@ -350,6 +398,9 @@ module.exports.load = async function (app, db) {
         }
       });
     } catch (error) {
+      if (error.message === 'ALREADY_PROCESSED') {
+        return res.status(400).json({ error: 'This payment has already been processed' });
+      }
       console.error('Error verifying checkout:', error);
       res.status(500).json({ error: 'Failed to verify checkout' });
     }
@@ -361,41 +412,52 @@ module.exports.load = async function (app, db) {
       const { package_id } = req.body;
       const userId = req.session.userinfo.id;
 
-      const package = COIN_PURCHASE_OPTIONS.find(p => p.amount === package_id);
-      if (!package) {
+      const pkg = COIN_PURCHASE_OPTIONS.find(p => p.amount === package_id);
+      if (!pkg) {
         return res.status(400).json({ error: 'Invalid package selected' });
       }
 
       const creditBalance = await billingManager.getCreditBalance(userId);
-      if (creditBalance < package.price_usd) {
+      if (creditBalance < pkg.price_usd) {
         return res.status(402).json({ error: 'Insufficient credit balance' });
       }
 
-      // Deduct credit and add coins
-      await billingManager.addCreditBalance(userId, -package.price_usd);
+      let transaction;
+      await db.$transaction(async (tx) => {
+        // Deduct credit
+        await tx.user.update({
+          where: { id: userId },
+          data: {
+            creditUsd: { decrement: pkg.price_usd },
+            coins: { increment: pkg.amount }
+          }
+        });
 
-      // Log the credit spending
-      await billingManager.logTransaction(
-        userId,
-        'credit_spend',
-        {
-          description: `Bought ${package.amount} Coins`
-        },
-        package.price_usd
-      );
+        // Log the credit spending
+        await tx.transaction.create({
+          data: {
+            userId,
+            type: 'spend',
+            amount: Math.round(pkg.price_usd * 100),
+            description: `Bought ${pkg.amount} Coins`,
+            details: JSON.stringify({ description: `Bought ${pkg.amount} Coins` })
+          }
+        });
 
-      await billingManager.addCoins(userId, package.amount);
-
-      // Log transaction
-      const transaction = await billingManager.logTransaction(
-        userId,
-        'coin_purchase',
-        {
-          package_amount: package.amount,
-          price_usd: package.price_usd
-        },
-        package.amount
-      );
+        // Log the coin purchase
+        transaction = await tx.transaction.create({
+          data: {
+            userId,
+            type: 'purchase',
+            amount: pkg.amount,
+            description: `Coin Purchase: ${pkg.amount} Coins`,
+            details: JSON.stringify({
+              package_amount: pkg.amount,
+              price_usd: pkg.price_usd
+            })
+          }
+        });
+      });
 
       res.json({
         success: true,
@@ -418,28 +480,52 @@ module.exports.load = async function (app, db) {
       const { recipientEmail, amount } = req.body;
       const userId = req.session.userinfo.id;
 
-      // 1. Check sender balance
       const senderCoins = await billingManager.getCoinBalance(userId);
       if (senderCoins < amount) {
         return res.status(402).json({ error: 'Insufficient coin balance' });
       }
 
-      // 2. Find recipient
-      // For now, we rely on the User ID provided by the sender.
-      // In future versions, we can implement email lookup or better user validation via a Users module.
+      // Find recipient by email or ID?
+      // Original code said: const recipientId = recipientEmail; // Using ID as the identifier
+      // I'll try to find user by email if it looks like one, or by ID.
+      let recipient;
+      if (recipientEmail.includes('@')) {
+        recipient = await db.user.findUnique({ where: { email: recipientEmail } });
+      } else {
+        recipient = await db.user.findUnique({ where: { id: recipientEmail } });
+      }
 
-      const recipientId = recipientEmail; // Using ID as the identifier
+      if (!recipient) {
+        return res.status(404).json({ error: 'Recipient not found' });
+      }
 
-      // Verify recipient exists (optional check could be added here if we have a user registry)
-      // Currently assuming the ID is valid for direct Pterodactyl ID transfers.
+      const recipientId = recipient.id;
 
-      // Perform transfer
-      await billingManager.removeCoins(userId, amount);
-      await billingManager.addCoins(recipientId, amount);
+      await db.$transaction(async (tx) => {
+        // Verify sender has enough again inside tx
+        const sender = await tx.user.findUnique({ where: { id: userId }, select: { coins: true } });
+        if (!sender || sender.coins < amount) throw new Error('INSUFFICIENT_FUNDS');
 
-      // Log transactions
-      await billingManager.logTransaction(userId, 'transfer_sent', { to: recipientId }, amount);
-      await billingManager.logTransaction(recipientId, 'transfer_received', { from: userId }, amount);
+        await tx.user.update({ where: { id: userId }, data: { coins: { decrement: amount } } });
+        await tx.user.update({ where: { id: recipientId }, data: { coins: { increment: amount } } });
+
+        await tx.transaction.create({
+          data: {
+            userId: userId,
+            type: 'transfer_out',
+            amount: -amount,
+            description: `Transfer to ${recipientId}`
+          }
+        });
+        await tx.transaction.create({
+          data: {
+            userId: recipientId,
+            type: 'transfer_in',
+            amount,
+            description: `Transfer from ${userId}`
+          }
+        });
+      });
 
       res.json({
         success: true,
@@ -447,6 +533,9 @@ module.exports.load = async function (app, db) {
       });
 
     } catch (error) {
+      if (error.message === 'INSUFFICIENT_FUNDS') {
+        return res.status(402).json({ error: 'Insufficient coin balance' });
+      }
       console.error('Error transferring coins:', error);
       res.status(500).json({ error: error.message || 'Failed to transfer coins' });
     }
@@ -459,6 +548,7 @@ module.exports.load = async function (app, db) {
       const userId = req.session.userinfo.id;
 
       const bundle = BUNDLES[bundle_id];
+      if (!bundle) return res.status(400).json({ error: 'Invalid bundle' });
 
       const creditBalance = await billingManager.getCreditBalance(userId);
       if (creditBalance < bundle.price_usd) {
@@ -469,10 +559,20 @@ module.exports.load = async function (app, db) {
       await billingManager.addCreditBalance(userId, -bundle.price_usd);
       await billingManager.applyBundle(userId, bundle_id);
 
+      const user = await db.user.findUnique({
+        where: { id: userId },
+        select: { extraRam: true, extraDisk: true, extraCpu: true, extraServers: true }
+      });
+
       res.json({
         success: true,
         new_credit_balance: await billingManager.getCreditBalance(userId),
-        new_resources: await billingManager.db.get(`extra-${userId}`),
+        new_resources: {
+          ram: user.extraRam,
+          disk: user.extraDisk,
+          cpu: user.extraCpu,
+          servers: user.extraServers
+        },
         new_coin_balance: await billingManager.getCoinBalance(userId)
       });
     } catch (error) {
@@ -488,9 +588,11 @@ module.exports.load = async function (app, db) {
       const transactions = await billingManager.getTransactionHistory(userId);
 
       res.json({
-        transactions: transactions.sort((a, b) =>
-          new Date(b.timestamp) - new Date(a.timestamp)
-        )
+        transactions: transactions.map(t => ({
+          ...t,
+          timestamp: t.createdAt.toISOString(),
+          details: JSON.parse(t.details || '{}')
+        }))
       });
     } catch (error) {
       console.error('Error fetching transactions:', error);
@@ -505,15 +607,15 @@ module.exports.load = async function (app, db) {
       const transactions = await billingManager.getTransactionHistory(userId);
 
       const invoices = transactions
-        .filter(t => t.type === 'credit_purchase' && t.details && (t.details.invoice_url || t.details.invoice_pdf))
+        .map(t => ({ ...t, details: JSON.parse(t.details || '{}') }))
+        .filter(t => t.type === 'purchase' && t.details && (t.details.invoice_url || t.details.invoice_pdf))
         .map(t => ({
           id: t.id,
-          date: t.timestamp,
-          amount: t.amount,
+          date: t.createdAt.toISOString(),
+          amount: t.amount / 100, // Cents to USD
           url: t.details?.invoice_url,
           pdf: t.details?.invoice_pdf
-        }))
-        .sort((a, b) => new Date(b.date) - new Date(a.date));
+        }));
 
       res.json({ invoices });
     } catch (error) {

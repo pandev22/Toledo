@@ -139,33 +139,36 @@ class DailyRewardsManager {
       const now = new Date();
       const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
 
+      const lastClaimTimestamp = streakInfo.lastClaimDate ? new Date(streakInfo.lastClaimDate).getTime() : 0;
+
       // Check if user has already claimed today
-      if (streakInfo.lastClaimTimestamp === today) {
+      if (lastClaimTimestamp === today) {
         throw new DailyRewardsError('You already claimed your daily reward today', 'ALREADY_CLAIMED');
       }
 
       // Calculate days since last claim
-      const daysSinceLastClaim = this.calculateDaysSinceLastClaim(streakInfo.lastClaimTimestamp);
+      const daysSinceLastClaim = this.calculateDaysSinceLastClaim(lastClaimTimestamp);
 
       // Check if streak is maintained or should reset
       let newStreak = 0;
       let streakMaintained = false;
       let streakProtectionUsed = false;
+      let streakProtectionRemaining = streakInfo.streakProtection || 0;
 
       // If this is first claim or within allowed gap
-      if (streakInfo.lastClaimTimestamp === 0 || daysSinceLastClaim <= this.DAILY_REWARDS.maxStreakGap) {
+      if (lastClaimTimestamp === 0 || daysSinceLastClaim <= this.DAILY_REWARDS.maxStreakGap) {
         newStreak = streakInfo.currentStreak + 1;
         streakMaintained = true;
       }
       // Check if streak protection can be applied
-      else if (streakInfo.streakProtection && streakInfo.streakProtection > 0) {
-        if (daysSinceLastClaim <= streakInfo.streakProtection) {
+      else if (streakProtectionRemaining > 0) {
+        if (daysSinceLastClaim <= streakProtectionRemaining) {
           newStreak = streakInfo.currentStreak + 1;
           streakMaintained = true;
           streakProtectionUsed = true;
 
           // Use up one streak protection day
-          streakInfo.streakProtection--;
+          streakProtectionRemaining--;
         } else {
           // Protection not applicable, reset streak
           newStreak = 1;
@@ -182,33 +185,30 @@ class DailyRewardsManager {
       const rewardDetails = this.calculateRewardAmount(newStreak);
       const totalReward = rewardDetails.amount;
 
-      // Add reward to user's coins
-      const currentCoins = await this.db.get(`coins-${userId}`) || 0;
-      const newBalance = currentCoins + totalReward;
-      await this.db.set(`coins-${userId}`, newBalance);
-
       // Check for milestone rewards that add streak protection
       if (rewardDetails.milestone && rewardDetails.milestone.streakProtection) {
         // Add bronze protection for milestone rewards that include it
-        if (!streakInfo.streakProtection || streakInfo.streakProtection < this.DAILY_REWARDS.streakProtection.bronze) {
-          streakInfo.streakProtection = this.DAILY_REWARDS.streakProtection.bronze;
+        if (streakProtectionRemaining < this.DAILY_REWARDS.streakProtection.bronze) {
+          streakProtectionRemaining = this.DAILY_REWARDS.streakProtection.bronze;
         }
       }
 
-      // Update user's streak info
-      const updatedStreakInfo = {
-        currentStreak: newStreak,
-        longestStreak: Math.max(newStreak, streakInfo.longestStreak || 0),
-        lastClaimTimestamp: today,
-        totalClaimed: (streakInfo.totalClaimed || 0) + 1,
-        totalCoinsEarned: (streakInfo.totalCoinsEarned || 0) + totalReward,
-        streakProtection: streakInfo.streakProtection || 0
-      };
-
-      await this.db.set(`daily-streak-${userId}`, updatedStreakInfo);
+      // Update user in transaction
+      const updatedUser = await this.db.user.update({
+        where: { id: userId },
+        data: {
+          coins: { increment: totalReward },
+          currentStreak: newStreak,
+          longestStreak: Math.max(newStreak, streakInfo.longestStreak),
+          lastClaimDate: new Date(today).toISOString(),
+          totalClaimed: { increment: 1 },
+          totalCoinsEarned: { increment: totalReward },
+          streakProtection: streakProtectionRemaining
+        }
+      });
 
       // Log the claim
-      await this.logDailyRewardClaim(userId, {
+      const claimDetails = {
         timestamp: now.getTime(),
         streak: newStreak,
         reward: totalReward,
@@ -218,7 +218,9 @@ class DailyRewardsManager {
         multiplier: rewardDetails.multiplier,
         milestoneBonus: rewardDetails.milestoneBonus,
         milestoneMessage: rewardDetails.milestoneMessage
-      });
+      };
+
+      await this.logDailyRewardClaim(userId, claimDetails);
 
       // Return claim details
       return {
@@ -226,10 +228,10 @@ class DailyRewardsManager {
         timestamp: now.getTime(),
         streak: newStreak,
         reward: totalReward,
-        newBalance,
+        newBalance: updatedUser.coins,
         streakMaintained,
         streakProtectionUsed,
-        streakProtectionRemaining: updatedStreakInfo.streakProtection,
+        streakProtectionRemaining,
         baseAmount: rewardDetails.baseAmount,
         multiplier: rewardDetails.multiplier,
         milestoneBonus: rewardDetails.milestoneBonus,
@@ -312,18 +314,29 @@ class DailyRewardsManager {
    * @returns {Object} - Streak info
    */
   async getUserStreakInfo(userId) {
-    const streakInfo = await this.db.get(`daily-streak-${userId}`);
-    if (!streakInfo) {
+    const user = await this.db.user.findUnique({
+      where: { id: userId },
+      select: {
+        currentStreak: true,
+        longestStreak: true,
+        lastClaimDate: true,
+        totalClaimed: true,
+        totalCoinsEarned: true,
+        streakProtection: true
+      }
+    });
+
+    if (!user) {
       return {
         currentStreak: 0,
         longestStreak: 0,
-        lastClaimTimestamp: 0,
+        lastClaimDate: null,
         totalClaimed: 0,
         totalCoinsEarned: 0,
         streakProtection: 0
       };
     }
-    return streakInfo;
+    return user;
   }
 
   /**
@@ -336,19 +349,19 @@ class DailyRewardsManager {
     const now = new Date();
     const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
 
-    const canClaim = streakInfo.lastClaimTimestamp !== today;
-    const daysSinceLastClaim = this.calculateDaysSinceLastClaim(streakInfo.lastClaimTimestamp);
+    const lastClaimTimestamp = streakInfo.lastClaimDate ? new Date(streakInfo.lastClaimDate).getTime() : 0;
+    const canClaim = lastClaimTimestamp !== today;
+    const daysSinceLastClaim = this.calculateDaysSinceLastClaim(lastClaimTimestamp);
 
     // Calculate what will happen to streak if claimed now
     let projectedStreak = 0;
     let streakWillMaintain = false;
     let willUseProtection = false;
 
-    if (streakInfo.lastClaimTimestamp === 0 || daysSinceLastClaim <= this.DAILY_REWARDS.maxStreakGap) {
+    if (lastClaimTimestamp === 0 || daysSinceLastClaim <= this.DAILY_REWARDS.maxStreakGap) {
       projectedStreak = streakInfo.currentStreak + 1;
       streakWillMaintain = true;
-    } else if (streakInfo.streakProtection && streakInfo.streakProtection > 0 &&
-      daysSinceLastClaim <= streakInfo.streakProtection) {
+    } else if (streakInfo.streakProtection > 0 && daysSinceLastClaim <= streakInfo.streakProtection) {
       projectedStreak = streakInfo.currentStreak + 1;
       streakWillMaintain = true;
       willUseProtection = true;
@@ -366,7 +379,7 @@ class DailyRewardsManager {
       daysSinceLastClaim,
       currentStreak: streakInfo.currentStreak,
       longestStreak: streakInfo.longestStreak,
-      lastClaimTimestamp: streakInfo.lastClaimTimestamp,
+      lastClaimTimestamp,
       totalClaimed: streakInfo.totalClaimed,
       totalCoinsEarned: streakInfo.totalCoinsEarned,
       streakProtection: streakInfo.streakProtection,
@@ -390,8 +403,15 @@ class DailyRewardsManager {
         throw new DailyRewardsError('Invalid protection level', 'INVALID_LEVEL');
       }
 
-      // Get user's streak info
-      const streakInfo = await this.getUserStreakInfo(userId);
+      // Get user's current coins and streak protection
+      const user = await this.db.user.findUnique({
+        where: { id: userId },
+        select: { coins: true, streakProtection: true }
+      });
+
+      if (!user) {
+        throw new DailyRewardsError('User not found', 'USER_NOT_FOUND');
+      }
 
       // Define prices for protection levels
       const protectionPrices = {
@@ -401,34 +421,40 @@ class DailyRewardsManager {
       };
 
       const price = protectionPrices[level];
+      const protectionDays = this.DAILY_REWARDS.streakProtection[level];
 
       // Check if user already has better protection
-      const protectionDays = this.DAILY_REWARDS.streakProtection[level];
-      if (streakInfo.streakProtection >= protectionDays) {
+      if (user.streakProtection >= protectionDays) {
         throw new DailyRewardsError('You already have equal or better streak protection', 'ALREADY_PROTECTED');
       }
 
       // Check if user has enough coins
-      const userCoins = await this.db.get(`coins-${userId}`) || 0;
-      if (userCoins < price) {
+      if (user.coins < price) {
         throw new DailyRewardsError('Insufficient coins', 'INSUFFICIENT_COINS');
       }
 
-      // Deduct coins and update protection
-      const newBalance = userCoins - price;
-      await this.db.set(`coins-${userId}`, newBalance);
-
-      // Update streak protection
-      streakInfo.streakProtection = protectionDays;
-      await this.db.set(`daily-streak-${userId}`, streakInfo);
+      // Deduct coins and update protection in transaction
+      const updatedUser = await this.db.user.update({
+        where: { id: userId },
+        data: {
+          coins: { decrement: price },
+          streakProtection: protectionDays
+        }
+      });
 
       // Log protection purchase
-      await this.logProtectionPurchase(userId, {
-        timestamp: Date.now(),
-        level,
-        protectionDays,
-        price,
-        newBalance
+      await this.db.transaction.create({
+        data: {
+          userId,
+          type: 'protection_purchase',
+          amount: -price,
+          description: `Streak Protection: ${level.toUpperCase()}`,
+          details: JSON.stringify({
+            level,
+            protectionDays,
+            timestamp: Date.now()
+          })
+        }
       });
 
       return {
@@ -436,8 +462,8 @@ class DailyRewardsManager {
         level,
         protectionDays,
         price,
-        newBalance,
-        streakInfo
+        newBalance: updatedUser.coins,
+        streakInfo: updatedUser
       };
     } catch (err) {
       if (err.name === 'DailyRewardsError') {
@@ -455,78 +481,33 @@ class DailyRewardsManager {
    */
   async getStreakLeaderboard(limit = 10) {
     try {
-      // Get all streak keys - Note: In a production environment, you'd want to use a more
-      // efficient approach than listing all keys, but for this demo it's acceptable
-      // You might consider using a separate leaderboard data structure that's updated on claims
-      const leaderboard = [];
-
-      // Since db.list() doesn't exist, we'll simulate this with a special "leaderboard" key
-      // that will be updated whenever a user's streak changes
-      const cachedLeaderboard = await this.db.get('streak-leaderboard') || [];
-
-      // Sort by current streak in descending order
-      const sortedLeaderboard = cachedLeaderboard.sort((a, b) => {
-        if (b.currentStreak !== a.currentStreak) {
-          return b.currentStreak - a.currentStreak;
-        }
-        // If streaks are equal, sort by longest streak
-        if (b.longestStreak !== a.longestStreak) {
-          return b.longestStreak - a.longestStreak;
-        }
-        // If longest streaks are equal, sort by total claimed
-        return b.totalClaimed - a.totalClaimed;
+      const users = await this.db.user.findMany({
+        where: { currentStreak: { gt: 0 } },
+        select: {
+          id: true,
+          username: true,
+          currentStreak: true,
+          longestStreak: true,
+          totalClaimed: true
+        },
+        orderBy: [
+          { currentStreak: 'desc' },
+          { longestStreak: 'desc' },
+          { totalClaimed: 'desc' }
+        ],
+        take: limit
       });
 
-      // Return top entries
-      return sortedLeaderboard.slice(0, limit);
+      return users.map(user => ({
+        userId: user.id,
+        username: user.username,
+        currentStreak: user.currentStreak,
+        longestStreak: user.longestStreak,
+        totalClaimed: user.totalClaimed
+      }));
     } catch (err) {
       console.error('[DAILY-REWARDS] Error getting streak leaderboard:', err);
       throw new DailyRewardsError('Failed to get streak leaderboard', 'INTERNAL_ERROR');
-    }
-  }
-
-  /**
-   * Update leaderboard with user's streak info
-   * @param {string} userId - User ID
-   * @param {string} username - Username
-   * @returns {Promise<void>}
-   */
-  async updateLeaderboard(userId, username) {
-    try {
-      const streakInfo = await this.getUserStreakInfo(userId);
-
-      // Get existing leaderboard
-      let leaderboard = await this.db.get('streak-leaderboard') || [];
-
-      // Find user's entry
-      const existingIndex = leaderboard.findIndex(entry => entry.userId === userId);
-
-      if (existingIndex !== -1) {
-        // Update existing entry
-        leaderboard[existingIndex] = {
-          userId,
-          username,
-          currentStreak: streakInfo.currentStreak,
-          longestStreak: streakInfo.longestStreak,
-          totalClaimed: streakInfo.totalClaimed,
-          lastUpdated: Date.now()
-        };
-      } else {
-        // Add new entry
-        leaderboard.push({
-          userId,
-          username,
-          currentStreak: streakInfo.currentStreak,
-          longestStreak: streakInfo.longestStreak,
-          totalClaimed: streakInfo.totalClaimed,
-          lastUpdated: Date.now()
-        });
-      }
-
-      // Save updated leaderboard
-      await this.db.set('streak-leaderboard', leaderboard);
-    } catch (err) {
-      console.error('[DAILY-REWARDS] Error updating leaderboard:', err);
     }
   }
 
@@ -539,53 +520,17 @@ class DailyRewardsManager {
   async logDailyRewardClaim(userId, details) {
     try {
       // Log to wallet transactions
-      const walletTransaction = {
-        id: `txn_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-        type: 'daily_claim',
-        details: {
+      await this.db.transaction.create({
+        data: {
+          userId,
+          type: 'daily_claim',
+          amount: details.reward,
           description: `Daily Reward (Streak: ${details.streak})`,
-          streak: details.streak
-        },
-        amount: details.reward,
-        timestamp: new Date().toISOString()
-      };
-      const history = await this.db.get(`transactions-${userId}`) || [];
-      history.push(walletTransaction);
-      await this.db.set(`transactions-${userId}`, history);
-
-      const logs = await this.db.get(`daily-claims-${userId}`) || [];
-      logs.unshift(details); // Add to beginning
-
-      // Keep only most recent 30 claims to prevent excessive storage
-      if (logs.length > 30) {
-        logs.splice(30);
-      }
-
-      await this.db.set(`daily-claims-${userId}`, logs);
+          details: JSON.stringify(details)
+        }
+      });
     } catch (err) {
       console.error('[DAILY-REWARDS] Error logging claim:', err);
-    }
-  }
-
-  /**
-   * Log protection purchase
-   * @param {string} userId - User ID
-   * @param {Object} details - Purchase details
-   * @returns {Promise<void>}
-   */
-  async logProtectionPurchase(userId, details) {
-    try {
-      const logs = await this.db.get(`protection-purchases-${userId}`) || [];
-      logs.unshift(details); // Add to beginning
-
-      // Keep only most recent 10 purchases
-      if (logs.length > 10) {
-        logs.splice(10);
-      }
-
-      await this.db.set(`protection-purchases-${userId}`, logs);
-    } catch (err) {
-      console.error('[DAILY-REWARDS] Error logging protection purchase:', err);
     }
   }
 
@@ -597,8 +542,23 @@ class DailyRewardsManager {
    */
   async getClaimHistory(userId, limit = 10) {
     try {
-      const logs = await this.db.get(`daily-claims-${userId}`) || [];
-      return logs.slice(0, limit);
+      const transactions = await this.db.transaction.findMany({
+        where: {
+          userId,
+          type: 'daily_claim'
+        },
+        orderBy: { createdAt: 'desc' },
+        take: limit
+      });
+
+      return transactions.map(txn => {
+        const details = JSON.parse(txn.details);
+        return {
+          ...details,
+          id: txn.id,
+          timestamp: txn.createdAt.getTime()
+        };
+      });
     } catch (err) {
       console.error('[DAILY-REWARDS] Error getting claim history:', err);
       throw new DailyRewardsError('Failed to get claim history', 'INTERNAL_ERROR');
@@ -633,9 +593,6 @@ module.exports.load = function (app, db) {
 
       const userId = req.session.userinfo.id;
       const result = await dailyRewardsManager.claimDailyReward(userId);
-
-      // Update leaderboard with user's info
-      await dailyRewardsManager.updateLeaderboard(userId, req.session.userinfo.username);
 
       res.json({
         success: true,

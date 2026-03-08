@@ -85,37 +85,6 @@ class StakingManager {
     // Create scheduled rewards processor
     this.REWARDS_INTERVAL_MS = 24 * 60 * 60 * 1000; // Process rewards daily
     this.startDailyRewardsProcessor();
-
-    // Keep track of active staking users with a single key
-    this.initializeActiveUsers();
-  }
-
-  async initializeActiveUsers() {
-    // Initialize the active users list if it doesn't exist
-    const activeUsers = await this.db.get("staking-active-users");
-    if (!activeUsers) {
-      await this.db.set("staking-active-users", []);
-    }
-  }
-
-  async addActiveUser(userId) {
-    const activeUsers = await this.db.get("staking-active-users") || [];
-    if (!activeUsers.includes(userId)) {
-      activeUsers.push(userId);
-      await this.db.set("staking-active-users", activeUsers);
-    }
-  }
-
-  async removeActiveUser(userId) {
-    const stakes = await this.db.get(`stakes-${userId}`) || [];
-    const activeStakes = stakes.filter(stake => stake.status === 'active');
-
-    // Only remove from active users if they have no more active stakes
-    if (activeStakes.length === 0) {
-      const activeUsers = await this.db.get("staking-active-users") || [];
-      const updatedUsers = activeUsers.filter(id => id !== userId);
-      await this.db.set("staking-active-users", updatedUsers);
-    }
   }
 
   startDailyRewardsProcessor() {
@@ -132,49 +101,41 @@ class StakingManager {
 
   async processAllStakingRewards() {
     try {
-      // Get all users with active stakes
-      const activeUsers = await this.db.get("staking-active-users") || [];
+      // Get all active stakes
+      const activeStakes = await this.db.stake.findMany({
+        where: { status: 'active' }
+      });
 
-      for (const userId of activeUsers) {
+      for (const stake of activeStakes) {
         try {
-          const stakes = await this.db.get(`stakes-${userId}`) || [];
-          let updated = false;
+          const now = new Date();
+          const lastRewardAt = new Date(stake.lastRewardAt);
+          const timeSinceLastReward = now.getTime() - lastRewardAt.getTime();
 
-          // Process each stake
-          for (let i = 0; i < stakes.length; i++) {
-            const stake = stakes[i];
+          // Only process if at least a day has passed since last reward
+          if (timeSinceLastReward >= 24 * 60 * 60 * 1000) {
+            // Calculate daily rewards (APY / 365)
+            const plan = this.STAKING_PLANS[stake.planId];
+            if (!plan) continue;
+            
+            const dailyRate = plan.apy / 365 / 100;
+            const dailyReward = stake.amount * dailyRate;
 
-            // Skip stakes that are already claimed
-            if (stake.status === 'claimed') continue;
-
-            // Calculate time since last reward
-            const now = Date.now();
-            const timeSinceLastReward = now - stake.lastRewardTime;
-
-            // Only process if at least a day has passed since last reward
-            if (timeSinceLastReward >= 24 * 60 * 60 * 1000) {
-              // Calculate daily rewards (APY / 365)
-              const plan = this.STAKING_PLANS[stake.planId];
-              const dailyRate = plan.apy / 365 / 100;
-              const dailyReward = stake.amount * dailyRate;
-
-              // Update stake with new rewards
-              stake.accruedRewards += dailyReward;
-              stake.lastRewardTime = now;
-              updated = true;
-            }
-          }
-
-          // Save updated stakes if any changes were made
-          if (updated) {
-            await this.db.set(`stakes-${userId}`, stakes);
+            // Update stake with new rewards
+            await this.db.stake.update({
+              where: { id: stake.id },
+              data: {
+                accruedRewards: { increment: dailyReward },
+                lastRewardAt: now
+              }
+            });
           }
         } catch (err) {
-          console.error(` Error processing rewards for user ${userId}:`, err);
+          console.error(` Error processing rewards for stake ${stake.id}:`, err);
         }
       }
     } catch (err) {
-      console.error(' Error getting active users:', err);
+      console.error(' Error getting active stakes:', err);
     }
   }
 
@@ -190,59 +151,59 @@ class StakingManager {
       throw new StakingError(`Minimum stake amount is ${plan.minAmount} coins`, 'INSUFFICIENT_AMOUNT');
     }
 
-    // Check user balance
-    const userCoins = await this.db.get(`coins-${userId}`) || 0;
-    if (userCoins < amount) {
+    // Check user balance and create stake in transaction
+    const user = await this.db.user.findUnique({
+      where: { id: userId },
+      select: { coins: true }
+    });
+
+    if (!user || user.coins < amount) {
       throw new StakingError('Insufficient balance', 'INSUFFICIENT_BALANCE');
     }
 
-    // Create stake record
-    const stakeId = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-    const stake = {
-      id: stakeId,
-      userId,
-      planId,
-      amount,
-      createdAt: Date.now(),
-      lastRewardTime: Date.now(),
-      accruedRewards: 0,
-      status: 'active',
-      endTime: plan.minDuration > 0 ? Date.now() + plan.minDuration : null
-    };
+    const [updatedUser, stake] = await this.db.$transaction([
+      this.db.user.update({
+        where: { id: userId },
+        data: { coins: { decrement: amount } }
+      }),
+      this.db.stake.create({
+        data: {
+          userId,
+          planId,
+          amount,
+          status: 'active',
+          lastRewardAt: new Date(),
+          endTime: plan.minDuration > 0 ? new Date(Date.now() + plan.minDuration) : null
+        }
+      })
+    ]);
 
-    // Update user's stakes
-    const stakes = await this.db.get(`stakes-${userId}`) || [];
-    stakes.push(stake);
-    await this.db.set(`stakes-${userId}`, stakes);
-
-    // Add user to active staking users
-    await this.addActiveUser(userId);
-
-    // Deduct coins from user's balance
-    const newBalance = userCoins - amount;
-    await this.db.set(`coins-${userId}`, newBalance);
-
-    // Return new stake and updated balance
-    
     // Log wallet transaction
-    await this.logWalletTransaction(userId, 'stake_create', `Staked in ${plan.name}`, -amount);
+    await this.logWalletTransaction(userId, 'stake_create', `Staked in ${plan.name}`, -amount, {
+      stakeId: stake.id,
+      planId,
+      amount
+    });
     
     return {
-      stake,
-      balance: newBalance
+      stake: {
+        ...stake,
+        createdAt: stake.createdAt.getTime(),
+        lastRewardTime: stake.lastRewardAt.getTime(),
+        endTime: stake.endTime?.getTime()
+      },
+      balance: updatedUser.coins
     };
   }
 
   async claimStake(userId, stakeId) {
-    // Get user's stakes
-    const stakes = await this.db.get(`stakes-${userId}`) || [];
-    const stakeIndex = stakes.findIndex(s => s.id === stakeId);
+    const stake = await this.db.stake.findFirst({
+      where: { id: stakeId, userId }
+    });
 
-    if (stakeIndex === -1) {
+    if (!stake) {
       throw new StakingError('Stake not found', 'STAKE_NOT_FOUND');
     }
-
-    const stake = stakes[stakeIndex];
 
     if (stake.status !== 'active') {
       throw new StakingError('Stake is not active', 'STAKE_NOT_ACTIVE');
@@ -250,8 +211,9 @@ class StakingManager {
 
     // Calculate if early withdrawal
     const plan = this.STAKING_PLANS[stake.planId];
+    const createdAtTime = stake.createdAt.getTime();
     const isEarlyWithdrawal = plan.minDuration > 0 &&
-      Date.now() < stake.createdAt + plan.minDuration;
+      Date.now() < createdAtTime + plan.minDuration;
 
     // Calculate total amount to return to user
     let totalReward = stake.amount + stake.accruedRewards;
@@ -262,24 +224,25 @@ class StakingManager {
       totalReward -= penalty;
     }
 
-    // Update user balance
-    const userCoins = await this.db.get(`coins-${userId}`) || 0;
-    const newBalance = userCoins + totalReward;
-    await this.db.set(`coins-${userId}`, newBalance);
+    // Update status and balance in transaction
+    const [updatedUser, updatedStake] = await this.db.$transaction([
+      this.db.user.update({
+        where: { id: userId },
+        data: { coins: { increment: Math.floor(totalReward) } }
+      }),
+      this.db.stake.update({
+        where: { id: stakeId },
+        data: {
+          status: 'completed',
+          claimedAt: new Date(),
+          returnedAmount: Math.floor(totalReward),
+          penalty
+        }
+      })
+    ]);
 
-    // Update stake status
-    stake.status = 'claimed';
-    stake.claimedAt = Date.now();
-    stake.returnedAmount = totalReward;
-    stake.penalty = penalty;
-
-    await this.db.set(`stakes-${userId}`, stakes);
-
-    // Check if user still has active stakes and update active users list
-    await this.removeActiveUser(userId);
-
-    // Log transaction
-    await this.logTransaction(userId, 'claim', {
+    // Log wallet transaction
+    await this.logWalletTransaction(userId, 'stake_claim', `Claimed Stake (Reward: ${stake.accruedRewards.toFixed(2)})`, Math.floor(totalReward), {
       stakeId,
       amount: stake.amount,
       rewards: stake.accruedRewards,
@@ -287,23 +250,31 @@ class StakingManager {
       totalReturned: totalReward
     });
 
-    // Log wallet transaction
-    await this.logWalletTransaction(userId, 'stake_claim', `Claimed Stake (Reward: ${stake.accruedRewards.toFixed(2)})`, totalReward);
-
     return {
-      stake,
-      balance: newBalance
+      stake: {
+        ...updatedStake,
+        createdAt: updatedStake.createdAt.getTime(),
+        lastRewardTime: updatedStake.lastRewardAt.getTime(),
+        claimedAt: updatedStake.claimedAt?.getTime(),
+        endTime: updatedStake.endTime?.getTime()
+      },
+      balance: updatedUser.coins
     };
   }
 
   async getUserStakes(userId) {
-    const stakes = await this.db.get(`stakes-${userId}`) || [];
+    const stakes = await this.db.stake.findMany({
+      where: { userId }
+    });
 
-    // Add plan details to each stake
     return stakes.map(stake => {
       const plan = this.STAKING_PLANS[stake.planId];
       return {
         ...stake,
+        createdAt: stake.createdAt.getTime(),
+        lastRewardTime: stake.lastRewardAt.getTime(),
+        endTime: stake.endTime?.getTime(),
+        claimedAt: stake.claimedAt?.getTime(),
         planDetails: plan
       };
     });
@@ -314,10 +285,15 @@ class StakingManager {
   }
 
   async getStakingSummary(userId) {
-    const stakes = await this.db.get(`stakes-${userId}`) || [];
-    const userCoins = await this.db.get(`coins-${userId}`) || 0;
+    const stakes = await this.db.stake.findMany({
+      where: { userId }
+    });
 
-    // Calculate totals
+    const user = await this.db.user.findUnique({
+      where: { id: userId },
+      select: { coins: true }
+    });
+
     const activeStakes = stakes.filter(s => s.status === 'active');
     const totalStaked = activeStakes.reduce((sum, stake) => sum + stake.amount, 0);
     const totalRewards = activeStakes.reduce((sum, stake) => sum + stake.accruedRewards, 0);
@@ -327,37 +303,24 @@ class StakingManager {
       totalRewards,
       activeStakesCount: activeStakes.length,
       totalStakesCount: stakes.length,
-      availableBalance: userCoins
+      availableBalance: user?.coins ?? 0
     };
   }
 
-  async logTransaction(userId, type, details) {
-    const transaction = {
-      id: `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-      userId,
-      type,
-      details,
-      timestamp: Date.now()
-    };
-
-    const history = await this.db.get(`staking-history-${userId}`) || [];
-    history.push(transaction);
-    await this.db.set(`staking-history-${userId}`, history);
-
-    return transaction;
-  }
-
-  async logWalletTransaction(userId, type, description, amount) {
-      const walletTransaction = {
-        id: `txn_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-        type,
-        details: { description },
-        amount,
-        timestamp: new Date().toISOString()
-      };
-      const history = await this.db.get(`transactions-${userId}`) || [];
-      history.push(walletTransaction);
-      await this.db.set(`transactions-${userId}`, history);
+  async logWalletTransaction(userId, type, description, amount, details) {
+    try {
+      await this.db.transaction.create({
+        data: {
+          userId,
+          type,
+          amount,
+          description,
+          details: JSON.stringify(details)
+        }
+      });
+    } catch (err) {
+      console.error('[STAKING] Error logging transaction:', err);
+    }
   }
 }
 
@@ -412,6 +375,7 @@ module.exports.load = function (app, db) {
 
       const userId = req.session.userinfo.id;
       const { planId, amount } = req.body;
+      const numericAmount = parseFloat(amount);
 
       const result = await stakingManager.createStake(userId, planId, numericAmount);
 
@@ -459,9 +423,22 @@ module.exports.load = function (app, db) {
       if (!req.session.userinfo) return res.status(401).json({ error: 'Unauthorized' });
 
       const userId = req.session.userinfo.id;
-      const history = await db.get(`staking-history-${userId}`) || [];
+      const transactions = await db.transaction.findMany({
+        where: {
+          userId,
+          type: { in: ['stake_create', 'stake_claim'] }
+        },
+        orderBy: { createdAt: 'desc' }
+      });
 
-      res.json(history);
+      res.json(transactions.map(txn => ({
+        id: txn.id,
+        userId: txn.userId,
+        type: txn.type,
+        details: JSON.parse(txn.details),
+        amount: txn.amount,
+        timestamp: txn.createdAt.getTime()
+      })));
     } catch (error) {
       console.error(' Error getting history:', error);
       res.status(500).json({ error: 'Internal server error' });
@@ -519,7 +496,13 @@ module.exports.load = function (app, db) {
         return res.status(403).json({ error: 'Forbidden' });
       }
 
-      const activeUsers = await db.get("staking-active-users") || [];
+      const activeStakes = await db.stake.findMany({
+        where: { status: 'active' },
+        distinct: ['userId'],
+        select: { userId: true }
+      });
+      
+      const activeUsers = activeStakes.map(s => s.userId);
       res.json({ activeUsers });
     } catch (error) {
       console.error(' Error getting active users:', error);
