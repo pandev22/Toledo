@@ -11,7 +11,7 @@ const chalk = require('./handlers/colors');
 
 const createLogger = require("./handlers/console.js");
 const loadConfig = require("./handlers/config");
-const Database = require("./db.js");
+const db = require("./db.js");
 const ModuleLoader = require("./handlers/modules.js");
 
 const VERSION = "10.0.0";
@@ -21,7 +21,6 @@ const API_LEVEL = 4;
 const settings = loadConfig("./config.toml");
 const logger = createLogger();
 const app = express();
-const db = new Database(settings.database);
 const wsInstance = require("express-ws")(app);
 
 wsInstance.getWss().on("connection", logger.wsRequestLogger.bind(logger));
@@ -108,3 +107,12 @@ if (require.main === module) {
 
 process.on("uncaughtException", (error) => logger.error("Uncaught exception", error));
 process.on("unhandledRejection", (error) => logger.error("Unhandled rejection", error));
+
+// Graceful Prisma shutdown
+const gracefulShutdown = async () => {
+  const { disconnect } = require("./db.js");
+  await disconnect();
+  process.exit(0);
+};
+process.on("SIGTERM", gracefulShutdown);
+process.on("SIGINT", gracefulShutdown);
