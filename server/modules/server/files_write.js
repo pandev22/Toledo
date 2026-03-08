@@ -4,7 +4,7 @@
 
 const express = require("express");
 const axios = require("axios");
-const { isAuthenticated, ownsServer, logActivity, PANEL_URL, API_KEY } = require("./core.js");
+const { isAuthenticated, ownsServer, PANEL_URL, API_KEY } = require("./core.js");
 const { validate, schemas } = require('../../handlers/validate');
 
 /* --------------------------------------------- */
@@ -59,7 +59,6 @@ module.exports.load = async function (app, db) {
         return res.status(response.status).json({ error: response.statusText });
       }
 
-      await logActivity(db, serverId, 'Write File', { file });
       res.status(204).send();
     } catch (error) {
       console.error("Error writing file:", error);
@@ -85,7 +84,6 @@ module.exports.load = async function (app, db) {
         }
       );
 
-      await logActivity(db, serverId, 'Create Folder', { root, name });
       res.status(204).send();
     } catch (error) {
       console.error("Error creating folder:", error);
@@ -111,7 +109,6 @@ module.exports.load = async function (app, db) {
         }
       );
 
-      await logActivity(db, serverId, 'Rename Files', { root, files });
       res.status(204).send();
     } catch (error) {
       console.error("Error renaming file/folder:", error);

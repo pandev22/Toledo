@@ -4,7 +4,7 @@
 
 const express = require("express");
 const axios = require("axios");
-const { isAuthenticated, ownsServer, logActivity, PANEL_URL, API_KEY } = require("./core.js");
+const { isAuthenticated, ownsServer, PANEL_URL, API_KEY } = require("./core.js");
 const { validate, schemas } = require('../../handlers/validate');
 
 /* --------------------------------------------- */
@@ -77,7 +77,6 @@ module.exports.load = async function (app, db) {
         }
       );
 
-      await logActivity(db, serverId, 'Copy Files', { location });
       res.status(204).send();
     } catch (error) {
       console.error("Error copying files:", error);
@@ -146,7 +145,6 @@ module.exports.load = async function (app, db) {
         }
       );
 
-      await logActivity(db, id, 'Server Transfer', { nodeId });
       res.status(200).json({
         message: `Transfer for server ${id} to node ${nodeId} initiated.`,
       });

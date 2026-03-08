@@ -72,9 +72,10 @@ const createServerLimiter = rateLimit({
 
 // Helper functions
 async function checkUserResources(userId, db, additionalResources = { ram: 0, disk: 0, cpu: 0 }) {
-    const packageName = await db.getCached(`package-${userId}`, 60000); // Cache for 1 minute
+    const userRecord = await db.user.findUnique({ where: { id: userId }, select: { packageName: true, extraRam: true, extraDisk: true, extraCpu: true, extraServers: true } });
+    const packageName = userRecord?.packageName;
     const package = settings.api.client.packages.list[packageName || settings.api.client.packages.default];
-    const extra = await db.getCached(`extra-${userId}`, 60000) || { ram: 0, disk: 0, cpu: 0, servers: 0 };
+    const extra = userRecord ? { ram: userRecord.extraRam, disk: userRecord.extraDisk, cpu: userRecord.extraCpu, servers: userRecord.extraServers } : { ram: 0, disk: 0, cpu: 0, servers: 0 };
 
     // Use cache for Pterodactyl user data (5 minutes TTL)
     const userServers = await cache.getOrSet(
@@ -131,14 +132,15 @@ module.exports.load = async function (app, db) {
     router.get('/eggs', async (req, res) => {
         try {
             // Get package name for restriction checking (with cache)
-            const packageName = await db.getCached(`package-${req.session.userinfo.id}`, 60000);
+            const userRecord = await db.user.findUnique({ where: { id: req.session.userinfo.id }, select: { packageName: true } });
+            const packageName = userRecord?.packageName;
             const userPackage = settings.api.client.packages.list[packageName || settings.api.client.packages.default];
 
             // Try dynamic eggs from database first
             if (getEggsFromDB) {
                 try {
                     const dbEggs = await getEggsFromDB(db);
-                    
+
                     if (dbEggs && Object.keys(dbEggs).length > 0) {
                         // Filter and format eggs from database
                         const eggs = Object.entries(dbEggs)
@@ -189,7 +191,8 @@ module.exports.load = async function (app, db) {
     router.get('/locations', async (req, res) => {
         try {
             // Get package name for restriction checking (with cache)
-            const packageName = await db.getCached(`package-${req.session.userinfo.id}`, 60000);
+            const userRecord = await db.user.findUnique({ where: { id: req.session.userinfo.id }, select: { packageName: true } });
+            const packageName = userRecord?.packageName;
             const userPackage = settings.api.client.packages.list[packageName || settings.api.client.packages.default];
 
             // Filter and format locations
@@ -239,17 +242,22 @@ module.exports.load = async function (app, db) {
     router.get('/resources', async (req, res) => {
         try {
             // Get package information (with cache)
-            const packageName = await db.getCached(`package-${req.session.userinfo.id}`, 60000);
+            const userRecord = await db.user.findUnique({ where: { id: req.session.userinfo.id }, select: { packageName: true, extraRam: true, extraDisk: true, extraCpu: true, extraServers: true } });
+            const packageName = userRecord?.packageName;
             const package = settings.api.client.packages.list[packageName || settings.api.client.packages.default];
 
             // Get extra resources (with cache)
-            const extra = await db.getCached(`extra-${req.session.userinfo.id}`, 60000) || {
+            const extra = userRecord ? {
+                ram: userRecord.extraRam,
+                disk: userRecord.extraDisk,
+                cpu: userRecord.extraCpu,
+                servers: userRecord.extraServers
+            } : {
                 ram: 0,
                 disk: 0,
                 cpu: 0,
                 servers: 0
             };
-
             // Get current resource usage
             const resources = await checkUserResources(req.session.userinfo.id, db);
 
@@ -347,9 +355,15 @@ module.exports.load = async function (app, db) {
                 () => getPteroUser(req.session.userinfo.id, db),
                 300
             );
-            const packageName = await db.getCached(`package-${req.session.userinfo.id}`, 60000);
+            const userRecord = await db.user.findUnique({ where: { id: req.session.userinfo.id }, select: { packageName: true, extraRam: true, extraDisk: true, extraCpu: true, extraServers: true, pterodactylId: true } });
+            const packageName = userRecord?.packageName;
             const package = settings.api.client.packages.list[packageName || settings.api.client.packages.default];
-            const extra = await db.get(`extra-${req.session.userinfo.id}`) || {
+            const extra = userRecord ? {
+                ram: userRecord.extraRam,
+                disk: userRecord.extraDisk,
+                cpu: userRecord.extraCpu,
+                servers: userRecord.extraServers
+            } : {
                 ram: 0,
                 disk: 0,
                 cpu: 0,
@@ -428,7 +442,7 @@ module.exports.load = async function (app, db) {
             // Create server specification
             const serverSpec = {
                 name: name,
-                user: await db.get(`users-${req.session.userinfo.id}`),
+                user: userRecord?.pterodactylId,
                 egg: eggInfo.info.egg,
                 docker_image: eggInfo.info.docker_image,
                 startup: eggInfo.info.startup,
@@ -489,9 +503,15 @@ module.exports.load = async function (app, db) {
                 () => getPteroUser(req.session.userinfo.id, db),
                 300
             );
-            const packageName = await db.getCached(`package-${req.session.userinfo.id}`, 60000);
+            const userRecord = await db.user.findUnique({ where: { id: req.session.userinfo.id }, select: { packageName: true, extraRam: true, extraDisk: true, extraCpu: true, extraServers: true } });
+            const packageName = userRecord?.packageName;
             const package = settings.api.client.packages.list[packageName || settings.api.client.packages.default];
-            const extra = await db.getCached(`extra-${req.session.userinfo.id}`, 60000) || {
+            const extra = userRecord ? {
+                ram: userRecord.extraRam,
+                disk: userRecord.extraDisk,
+                cpu: userRecord.extraCpu,
+                servers: userRecord.extraServers
+            } : {
                 ram: 0,
                 disk: 0,
                 cpu: 0,

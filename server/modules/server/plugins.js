@@ -458,8 +458,15 @@ module.exports.load = async function (app, db) {
       // Get current installed plugins from DB
       let installedPlugins = [];
       if (db) {
-        const stored = db.get(`servers.${serverId}.plugins`);
-        installedPlugins = Array.isArray(stored) ? stored : [];
+        const plugins = await db.installedPlugin.findMany({ where: { serverId } });
+        installedPlugins = plugins.map(p => ({
+          id: p.pluginId,
+          name: p.name,
+          pluginName: p.pluginName,
+          platform: p.platform,
+          installedAt: p.installedAt.toISOString(),
+          manuallyAdded: p.manuallyAdded
+        }));
       }
 
       // Add plugin files not already in DB
@@ -472,22 +479,35 @@ module.exports.load = async function (app, db) {
         );
 
         if (!isTracked) {
-          installedPlugins.push({
-            id: `manual-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-            name: file.name,
-            platform: 'manual',
-            installedAt: file.modified || new Date().toISOString(),
-            manuallyAdded: true
-          });
+          if (db) {
+            await db.installedPlugin.create({
+              data: {
+                serverId,
+                pluginId: `manual-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+                name: file.name,
+                pluginName: file.name,
+                platform: 'manual',
+                installedAt: file.modified ? new Date(file.modified) : new Date(),
+                manuallyAdded: true
+              }
+            });
+          }
           added++;
         }
       }
 
-      // Update the DB
+      // Re-fetch installed plugins after potential additions
       if (db && added > 0) {
-        db.set(`servers.${serverId}.plugins`, installedPlugins);
+        const plugins = await db.installedPlugin.findMany({ where: { serverId } });
+        installedPlugins = plugins.map(p => ({
+          id: p.pluginId,
+          name: p.name,
+          pluginName: p.pluginName,
+          platform: p.platform,
+          installedAt: p.installedAt.toISOString(),
+          manuallyAdded: p.manuallyAdded
+        }));
       }
-
       res.json({
         success: true,
         message: `Scanned plugins directory and found ${pluginFiles.length} plugin files. Added ${added} new plugins to tracking.`,
@@ -502,6 +522,8 @@ module.exports.load = async function (app, db) {
       });
     }
   });
+
+
 
   // POST /api/plugins/install/:serverId - Install plugin
   router.post("/plugins/install/:serverId", isAuthenticated, ownsServer, validate(schemas.pluginInstall), async (req, res) => {
@@ -611,38 +633,34 @@ module.exports.load = async function (app, db) {
 
       if (db) {
         try {
-          // Get existing plugins or initialize empty array if doesn't exist or invalid
-          let installedPlugins = db.get(`servers.${serverId}.plugins`);
-          if (!Array.isArray(installedPlugins)) {
-            installedPlugins = [];
-          }
-
-          // Only add if not already tracked
           const pluginIdentifier = String(pluginId);
           const platformName = String(platform);
 
-          // Check if already installed using both id and name
-          const isAlreadyInstalled = installedPlugins.some(p =>
-            p && ((p.id === pluginIdentifier && p.platform === platformName) ||
-              (p.name.toLowerCase() === pluginName.toLowerCase()))
-          );
-
-          if (!isAlreadyInstalled) {
-            installedPlugins.push({
-              id: pluginIdentifier,
+          await db.installedPlugin.upsert({
+            where: {
+              serverId_pluginId_platform: {
+                serverId,
+                pluginId: pluginIdentifier,
+                platform: platformName
+              }
+            },
+            update: {
               name: pluginName,
-              pluginName: pluginName, // Add both for compatibility
+              pluginName: pluginName
+            },
+            create: {
+              serverId,
+              pluginId: pluginIdentifier,
+              name: pluginName,
+              pluginName: pluginName,
               platform: platformName,
-              installedAt: new Date().toISOString()
-            });
-
-            db.set(`servers.${serverId}.plugins`, installedPlugins);
-          }
+              manuallyAdded: false
+            }
+          });
         } catch (dbError) {
           console.error("Error tracking plugin installation in database:", dbError);
         }
       }
-
       res.json({
         success: true,
         message: "Plugin installed successfully",
@@ -666,9 +684,15 @@ module.exports.load = async function (app, db) {
       // Check DB for installed plugins
       let installedPlugins = [];
       if (db) {
-        const storedPlugins = db.get(`servers.${serverId}.plugins`);
-        // Ensure we always return an array even if DB value is invalid
-        installedPlugins = Array.isArray(storedPlugins) ? storedPlugins : [];
+        const plugins = await db.installedPlugin.findMany({ where: { serverId } });
+        installedPlugins = plugins.map(p => ({
+          id: p.pluginId,
+          name: p.name,
+          pluginName: p.pluginName,
+          platform: p.platform,
+          installedAt: p.installedAt.toISOString(),
+          manuallyAdded: p.manuallyAdded
+        }));
       }
 
       // Return the list of installed plugins

@@ -6,7 +6,7 @@ const express = require("express");
 const axios = require("axios");
 const loadConfig = require("../../handlers/config");
 const settings = loadConfig("./config.toml");
-const { isAuthenticated, ownsServer, logActivity, PANEL_URL, API_KEY } = require("./core.js");
+const { isAuthenticated, ownsServer, PANEL_URL, API_KEY } = require("./core.js");
 const { validate, schemas } = require('../../handlers/validate');
 
 /* --------------------------------------------- */
@@ -64,7 +64,6 @@ module.exports.load = async function (app, db) {
       );
 
       if (response.status === 204) {
-        await logActivity(db, serverId, 'Power Action', { signal });
         res.status(204).send();
       } else {
         throw new Error('Unexpected response from panel');
@@ -85,7 +84,6 @@ module.exports.load = async function (app, db) {
       const { command } = req.body;
 
       await sendCommandAndGetResponse(serverId, command);
-      await logActivity(db, serverId, 'Send Command', { command });
 
       res.json({ success: true, message: "Command sent successfully" });
     } catch (error) {

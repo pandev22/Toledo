@@ -110,8 +110,8 @@ const ownsServer = async (req, res, next) => {
 
     // FORCE CHECK
     try {
-      let q = await db.get('force-' + serverId);
-      if (q == req.session.userinfo.id) {
+      const forced = await db.subuserServer.findFirst({ where: { serverId, source: 'forced' } });
+      if (forced && forced.userId === req.session.userinfo.id) {
         return next();
       }
     } catch (error) {
@@ -121,7 +121,8 @@ const ownsServer = async (req, res, next) => {
     // SECOND CHECK: Check if user is a subuser via pterodactyl username
     try {
       const pteroUsername = req.session.pterodactyl.username;
-      const subuserServers = await db.get(`subuser-servers-${pteroUsername}`) || [];
+      const results = await db.subuserServer.findMany({ where: { user: { pteroUsername } } });
+      const subuserServers = results.map(s => ({ id: s.serverId, name: s.serverName, ownerId: s.ownerId }));
 
       let hasAccess = subuserServers.some(server => {
         const normalizedSubuserId = normalizeId(server?.id);
@@ -138,7 +139,8 @@ const ownsServer = async (req, res, next) => {
     // THIRD CHECK: Check if user is a subuser via discord ID
     try {
       const discordId = req.session.userinfo.id;
-      const discordServers = await db.get(`subuser-servers-discord-${discordId}`) || [];
+      const results = await db.subuserServer.findMany({ where: { user: { discordId } } });
+      const discordServers = results.map(s => ({ id: s.serverId, name: s.serverName, ownerId: s.ownerId }));
 
       let hasAccess = discordServers.some(server => {
         const normalizedSubuserId = normalizeId(server?.id);
@@ -191,20 +193,6 @@ const ownsServer = async (req, res, next) => {
   }
 };
 
-// Activity logging helper
-async function logActivity(db, serverId, action, details) {
-  const timestamp = new Date().toISOString();
-  const activityLog = await db.get(`activity_log_${serverId}`) || [];
-
-  activityLog.unshift({ timestamp, action, details });
-
-  // Keep only the last 100 activities
-  if (activityLog.length > 100) {
-    activityLog.pop();
-  }
-
-  await db.set(`activity_log_${serverId}`, activityLog);
-}
 
 // WebSocket helper function
 async function withServerWebSocket(serverId, callback) {
@@ -355,7 +343,6 @@ module.exports = {
   HeliactylModule,
   isAuthenticated,
   ownsServer,
-  logActivity,
   withServerWebSocket,
   sendCommandAndGetResponse,
   apiRequest,
