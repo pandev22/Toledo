@@ -170,17 +170,6 @@ async function addDiscordServerMember(userId, accessToken, username) {
     return false;
   }
 }
-
-async function addUserNotification(db, userId, notification) {
-  const notifications = await db.get(`notifications-${userId}`) || [];
-  notifications.push({
-    id: crypto.randomUUID(),
-    ...notification,
-    timestamp: new Date().toISOString()
-  });
-  await db.set(`notifications-${userId}`, notifications);
-}
-
 // Discord bot setup
 client.once('ready', () => {
 });
@@ -264,71 +253,65 @@ module.exports.load = async function (app, db) {
       const userData = userResponse.data;
 
       // Get or create user record
-      let userRecord = await db.get(`discord-${userData.id}`);
-      let pteroId = await db.get(`users-${userData.id}`);
-      let isNewUser = false;
+      let user = await db.user.findUnique({ where: { discordId: userData.id } });
+      let pteroId = user?.pterodactylId;
+      let isNewUser = !user;
 
       // Verify existing Pterodactyl account or create new one
       if (!pteroId || !(await verifyPterodactylAccount(pteroId))) {
         const pteroAccount = await createPterodactylAccount(userData.id, userData.username, userData.email);
         pteroId = pteroAccount.id;
-
-        let userids = await db.get("users") || [];
-        userids = userids.filter(id => id !== pteroId);
-        userids.push(pteroId);
-        await db.set("users", userids);
-        await db.set(`users-${userData.id}`, pteroId);
-
-        isNewUser = !userRecord;
       }
 
-      // Update user record with current information and maintain pteroId for stability
-      userRecord = {
-        id: userData.id,
-        username: userData.username, // Store current username but don't rely on it for identification
-        email: userData.email,
-        pterodactyl_id: pteroId,
-        access_token: tokenData.access_token,
-        refresh_token: tokenData.refresh_token,
-        createdAt: userRecord?.createdAt || new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      };
-
-      await db.set(`discord-${userData.id}`, userRecord);
-
-      // Add signup bonus for new users
       if (isNewUser) {
-        const currentCoins = await db.get(`coins-${userData.id}`) || 0;
-        await db.set(`coins-${userData.id}`, currentCoins + DISCORD_SIGNUP_BONUS);
+        user = await db.user.create({
+          data: {
+            discordId: userData.id,
+            username: userData.username,
+            email: userData.email,
+            password: "oauth",
+            pterodactylId: pteroId,
+            discordAccessToken: tokenData.access_token,
+            discordRefreshToken: tokenData.refresh_token,
+            coins: DISCORD_SIGNUP_BONUS
+          }
+        });
 
-        await addUserNotification(db, userData.id, {
-          action: "coins:bonus",
-          name: `Discord Signup Bonus: +${DISCORD_SIGNUP_BONUS} coins`
+        await db.notification.create({ data: { userId: user.id, action: "coins:bonus", name: `Discord Signup Bonus: +${DISCORD_SIGNUP_BONUS} coins` } });
+      } else {
+        user = await db.user.update({
+          where: { id: user.id },
+          data: {
+            username: userData.username,
+            email: userData.email,
+            pterodactylId: pteroId,
+            discordAccessToken: tokenData.access_token,
+            discordRefreshToken: tokenData.refresh_token,
+            updatedAt: new Date()
+          }
         });
       }
 
-      const twoFactorData = await db.get(`2fa-${userData.id}`);
-
-      if (twoFactorData?.enabled) {
+      if (user.twoFactorEnabled) {
         // Set a flag in session that 2FA is required
         req.session.twoFactorPending = true;
-        req.session.twoFactorUserId = userData.id;
+        req.session.twoFactorUserId = user.id;
         req.session.tempUserInfo = {
-          id: userData.id,
-          username: userData.username,
-          email: userData.email
+          id: user.id,
+          username: user.username,
+          email: user.email
         };
 
         // Redirect to 2FA verification page instead of dashboard
         return res.redirect('/auth/2fa');
       }
 
-      // Set up session - now using userId as the primary identifier
+      // Set up session - now using internal userId as the primary identifier
       req.session.userinfo = {
-        id: userData.id,
-        username: userData.username,
-        email: userData.email,
-        global_name: userData.global_username || userData.username
+        id: user.id,
+        username: user.username,
+        email: user.email,
+        global_name: userData.global_name || userData.username
       };
 
       // Fetch and set Pterodactyl session data
@@ -339,10 +322,7 @@ module.exports.load = async function (app, db) {
       await addDiscordServerMember(userData.id, tokenData.access_token, userData.username);
 
       // Add login notification
-      await addUserNotification(db, userData.id, {
-        action: "user:auth",
-        name: "Sign in with Discord"
-      });
+      await db.notification.create({ data: { userId: user.id, action: "user:auth", name: "Sign in with Discord" } });
 
       res.redirect('/dashboard');
     } catch (error) {
@@ -360,9 +340,9 @@ module.exports.load = async function (app, db) {
     }
 
     const userId = req.session.userinfo.id;
-    const userRecord = await db.get(`discord-${userId}`);
+    const user = await db.user.findUnique({ where: { id: userId } });
 
-    if (!userRecord?.refresh_token) {
+    if (!user?.discordRefreshToken) {
       return res.status(400).json({ error: 'No refresh token available' });
     }
 
@@ -372,7 +352,7 @@ module.exports.load = async function (app, db) {
           client_id: DISCORD_CLIENT_ID,
           client_secret: DISCORD_CLIENT_SECRET,
           grant_type: 'refresh_token',
-          refresh_token: userRecord.refresh_token,
+          refresh_token: user.discordRefreshToken,
         }),
         {
           headers: {
@@ -384,11 +364,14 @@ module.exports.load = async function (app, db) {
       const tokenData = response.data;
 
       // Update stored tokens
-      userRecord.access_token = tokenData.access_token;
-      userRecord.refresh_token = tokenData.refresh_token;
-      userRecord.updatedAt = new Date().toISOString();
-
-      await db.set(`discord-${userId}`, userRecord);
+      await db.user.update({
+        where: { id: user.id },
+        data: {
+          discordAccessToken: tokenData.access_token,
+          discordRefreshToken: tokenData.refresh_token,
+          updatedAt: new Date()
+        }
+      });
 
       res.json({ message: 'Token refreshed successfully' });
     } catch (error) {

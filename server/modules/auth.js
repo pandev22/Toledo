@@ -118,9 +118,12 @@ module.exports.load = async function (app, db) {
     req.login = async function (user, options, done) {
       try {
         // Check if user has 2FA enabled
-        const twoFactorData = await db.get(`2fa-${user.id}`);
+        const userData = await db.user.findUnique({
+          where: { id: user.id },
+          select: { twoFactorEnabled: true }
+        });
 
-        if (twoFactorData?.enabled) {
+        if (userData?.twoFactorEnabled) {
           // Set a flag in session that 2FA is required
           req.session.twoFactorPending = true;
           req.session.twoFactorUserId = user.id;
@@ -146,13 +149,13 @@ module.exports.load = async function (app, db) {
     const { username, email, password } = req.body;
 
     // Check if email is already in use
-    const existingUser = await db.get(`user-${email}`);
+    const existingUser = await db.user.findUnique({ where: { email } });
     if (existingUser) {
       return res.status(409).json({ error: "Email already in use" });
     }
 
     // Check if username is already taken
-    const existingUsername = await db.get(`username-${username}`);
+    const existingUsername = await db.user.findUnique({ where: { username } });
     if (existingUsername) {
       return res.status(409).json({ error: "Username already taken" });
     }
@@ -165,16 +168,14 @@ module.exports.load = async function (app, db) {
     const hashedPassword = await bcrypt.hash(password, saltRounds);
 
     // Store user information
-    await db.set(`user-${email}`, {
-      id: userId,
-      username,
-      email,
-      password: hashedPassword,
-      createdAt: new Date().toISOString()
+    await db.user.create({
+      data: {
+        id: userId,
+        username,
+        email,
+        password: hashedPassword,
+      }
     });
-
-    await db.set(`userid-${userId}`, email);
-    await db.set(`username-${username}`, userId);
 
     // Create Pterodactyl account
     let genpassword = makeid(settings.api.client.passwordgenerator.length);
@@ -202,10 +203,10 @@ module.exports.load = async function (app, db) {
 
     if (accountjson.status === 201) {
       let accountinfo = accountjson.data;
-      let userids = (await db.get("users")) ? await db.get("users") : [];
-      userids.push(accountinfo.attributes.id);
-      await db.set("users", userids);
-      await db.set("users-" + userId, accountinfo.attributes.id);
+      await db.user.update({
+        where: { id: userId },
+        data: { pterodactylId: accountinfo.attributes.id }
+      });
     } else {
       return res.status(201).json({ error: "Your account has been created. Please login" });
     }
@@ -216,7 +217,7 @@ module.exports.load = async function (app, db) {
   app.post("/auth/login", rateLimit, validate(schemas.authLogin), async (req, res) => {
     const { email, password, remember } = req.body;
 
-    const user = await db.get(`user-${email}`);
+    const user = await db.user.findUnique({ where: { email } });
     if (!user) {
       return res.status(401).json({ error: "Invalid email or password" });
     }
@@ -236,18 +237,22 @@ module.exports.load = async function (app, db) {
 
     try {
       // Try to fetch existing Pterodactyl user info
-      let pterodactylId = await db.get("users-" + user.id);
+      let pterodactylId = user.pterodactylId;
       let cacheaccount;
       try {
-        cacheaccount = await axios.get(
-          settings.pterodactyl.domain + "/api/application/users/" + pterodactylId + "?include=servers",
-          {
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${settings.pterodactyl.key}`,
-            },
-          }
-        );
+        if (pterodactylId) {
+          cacheaccount = await axios.get(
+            settings.pterodactyl.domain + "/api/application/users/" + pterodactylId + "?include=servers",
+            {
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${settings.pterodactyl.key}`,
+              },
+            }
+          );
+        } else {
+          cacheaccount = { status: 404 };
+        }
       } catch (err) {
         cacheaccount = { status: err.response?.status || 500 };
       }
@@ -257,11 +262,10 @@ module.exports.load = async function (app, db) {
         pterodactylId = await createPterodactylAccount(user.username, user.email);
 
         // Update database with new Pterodactyl ID
-        let userids = (await db.get("users")) || [];
-        userids = userids.filter(id => id !== pterodactylId); // Remove old ID if exists
-        userids.push(pterodactylId);
-        await db.set("users", userids);
-        await db.set("users-" + user.id, pterodactylId);
+        await db.user.update({
+          where: { id: user.id },
+          data: { pterodactylId: pterodactylId }
+        });
 
         // Fetch updated user info
         cacheaccount = await axios.get(
@@ -283,13 +287,13 @@ module.exports.load = async function (app, db) {
       req.session.pterodactyl = cacheaccountinfo.attributes;
 
       // Auth notification
-      let notifications = await db.get('notifications-' + user.id) || [];
-      notifications.push({
-        "action": "user:auth",
-        "name": "Sign in from new location",
-        "timestamp": new Date().toISOString()
+      await db.notification.create({
+        data: {
+          userId: user.id,
+          action: "user:auth",
+          name: "Sign in from new location"
+        }
       });
-      await db.set('notifications-' + user.id, notifications);
 
       res.json({ message: "Login successful" });
     } catch (error) {
@@ -302,7 +306,7 @@ module.exports.load = async function (app, db) {
   app.post("/auth/reset-password-request", validate(schemas.authResetRequest), async (req, res) => {
     const { email } = req.body;
 
-    const user = await db.get(`user-${email}`);
+    const user = await db.user.findUnique({ where: { email } });
     if (!user) {
       return res.json({ message: "If the email exists, a reset link will be sent" });
     }
@@ -310,9 +314,13 @@ module.exports.load = async function (app, db) {
     const resetToken = crypto.randomBytes(32).toString('hex');
     const resetTokenExpiry = Date.now() + 3600000; // 1 hour from now
 
-    await db.set(`reset-${resetToken}`, {
-      userId: user.id,
-      expiry: resetTokenExpiry
+    await db.authToken.create({
+      data: {
+        userId: user.id,
+        token: resetToken,
+        type: 'reset',
+        expiresAt: new Date(resetTokenExpiry)
+      }
     });
 
     const resetLink = `${settings.website.domain}/auth/reset-password?token=${resetToken}`;
@@ -336,13 +344,12 @@ module.exports.load = async function (app, db) {
     const { token, password } = req.body;
     const newPassword = password;
 
-    const resetInfo = await db.get(`reset-${token}`);
-    if (!resetInfo || resetInfo.expiry < Date.now()) {
+    const resetInfo = await db.authToken.findUnique({ where: { token } });
+    if (!resetInfo || resetInfo.type !== 'reset' || resetInfo.expiresAt < new Date()) {
       return res.status(400).json({ error: "Invalid or expired token" });
     }
 
-    const userEmail = await db.get(`userid-${resetInfo.userId}`);
-    const user = await db.get(`user-${userEmail}`);
+    const user = await db.user.findUnique({ where: { id: resetInfo.userId } });
 
     if (!user) {
       return res.status(404).json({ error: "User not found" });
@@ -353,11 +360,13 @@ module.exports.load = async function (app, db) {
     const hashedPassword = await bcrypt.hash(newPassword, saltRounds);
 
     // Update user's password
-    user.password = hashedPassword;
-    await db.set(`user-${userEmail}`, user);
+    await db.user.update({
+      where: { id: resetInfo.userId },
+      data: { password: hashedPassword }
+    });
 
     // Delete the used reset token
-    await db.delete(`reset-${token}`);
+    await db.authToken.delete({ where: { token } });
 
     res.json({ message: "Password reset successful" });
   });
@@ -366,7 +375,7 @@ module.exports.load = async function (app, db) {
   app.post("/auth/magic-link", rateLimit, validate(schemas.authMagicLink), async (req, res) => {
     const { email } = req.body;
 
-    const user = await db.get(`user-${email}`);
+    const user = await db.user.findUnique({ where: { email } });
     if (!user) {
       return res.json({ message: "If the email exists, a magic link will be sent" });
     }
@@ -374,9 +383,13 @@ module.exports.load = async function (app, db) {
     const magicToken = crypto.randomBytes(32).toString('hex');
     const magicTokenExpiry = Date.now() + 600000; // 10 minutes from now
 
-    await db.set(`magic-${magicToken}`, {
-      userId: user.id,
-      expiry: magicTokenExpiry
+    await db.authToken.create({
+      data: {
+        userId: user.id,
+        token: magicToken,
+        type: 'magic',
+        expiresAt: new Date(magicTokenExpiry)
+      }
     });
 
     const magicLink = `${settings.website.domain}/auth/magic-login?token=${magicToken}`;
@@ -403,13 +416,12 @@ module.exports.load = async function (app, db) {
       return res.status(400).json({ error: "Token is required" });
     }
 
-    const magicInfo = await db.get(`magic-${token}`);
-    if (!magicInfo || magicInfo.expiry < Date.now()) {
+    const magicInfo = await db.authToken.findUnique({ where: { token } });
+    if (!magicInfo || magicInfo.type !== 'magic' || magicInfo.expiresAt < new Date()) {
       return res.status(400).json({ error: "Invalid or expired token" });
     }
 
-    const userEmail = await db.get(`userid-${magicInfo.userId}`);
-    const user = await db.get(`user-${userEmail}`);
+    const user = await db.user.findUnique({ where: { id: magicInfo.userId } });
 
     if (!user) {
       return res.status(404).json({ error: "User not found" });
@@ -427,7 +439,7 @@ module.exports.load = async function (app, db) {
     let cacheaccount;
     try {
       cacheaccount = await axios.get(
-        settings.pterodactyl.domain + "/api/application/users/" + (await db.get("users-" + user.id)) + "?include=servers",
+        settings.pterodactyl.domain + "/api/application/users/" + user.pterodactylId + "?include=servers",
         {
           headers: {
             "Content-Type": "application/json",
@@ -447,18 +459,16 @@ module.exports.load = async function (app, db) {
     req.session.pterodactyl = cacheaccountinfo.attributes;
 
     // Delete the used magic token
-    await db.delete(`magic-${token}`);
+    await db.authToken.delete({ where: { token } });
 
     // Auth notification
-    let notifications = await db.get('notifications-' + user.id) || [];
-    let notification = {
-      "action": "user:auth",
-      "name": "Sign in using magic link",
-      "timestamp": new Date().toISOString()
-    }
-
-    notifications.push(notification)
-    await db.set('notifications-' + user.id, notifications)
+    await db.notification.create({
+      data: {
+        userId: user.id,
+        action: "user:auth",
+        name: "Sign in using magic link"
+      }
+    });
 
     res.redirect('/dashboard'); // Redirect to dashboard after successful login
   });
@@ -472,13 +482,13 @@ module.exports.load = async function (app, db) {
     try {
       // Add logout notification
       const userId = req.session.userinfo.id;
-      let notifications = await db.get('notifications-' + userId) || [];
-      notifications.push({
-        "action": "user:logout",
-        "name": "Signed out",
-        "timestamp": new Date().toISOString()
+      await db.notification.create({
+        data: {
+          userId: userId,
+          action: "user:logout",
+          name: "Signed out"
+        }
       });
-      await db.set('notifications-' + userId, notifications);
 
       // Destroy the session
       req.session.destroy((err) => {
