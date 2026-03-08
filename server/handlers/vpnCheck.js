@@ -1,7 +1,19 @@
 const axios = require("axios");
 
 module.exports = async (key, db, ip, res) => {
-  let ipcache = await db.get(`vpncheckcache-${ip}`);
+  let ipcache = null;
+  const cacheKey = `vpncheckcache-${ip}`;
+  const row = await db.heliactyl.findUnique({ where: { key: cacheKey } });
+  if (row) {
+    try {
+      const parsed = JSON.parse(row.value);
+      if (parsed.expires && Date.now() > parsed.expires) {
+        await db.heliactyl.delete({ where: { key: cacheKey } });
+      } else {
+        ipcache = parsed.value;
+      }
+    } catch { /* corrupted cache entry, ignore */ }
+  }
   
   if (!ipcache) {
     try {
@@ -27,7 +39,12 @@ module.exports = async (key, db, ip, res) => {
   
   // Cache result for 48 hours
   if (ipcache) {
-    await db.set(`vpncheckcache-${ip}`, ipcache, 172800000);
+    const cacheData = JSON.stringify({ value: ipcache, expires: Date.now() + 172800000 });
+    await db.heliactyl.upsert({
+      where: { key: cacheKey },
+      update: { value: cacheData },
+      create: { key: cacheKey, value: cacheData }
+    });
   }
   
   // Block if VPN/proxy detected
