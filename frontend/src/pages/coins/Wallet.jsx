@@ -105,6 +105,78 @@ export default function WalletPage() {
     enabled: activeTab === 'invoices'
   });
 
+  const formatTransactionDetails = (txn) => {
+    if (!txn.details) return 'No details available';
+    if (typeof txn.details === 'string') return txn.details;
+
+    const { type, details } = txn;
+
+    if (type === 'credit_purchase') return 'Stripe Top-up';
+    if (type === 'coin_purchase') return `${details.package_amount || 'Unknown'} Coins`;
+    if (type === 'transfer_sent') return `Sent to ${details.to || 'Unknown'}`;
+    if (type === 'transfer_received') return `Received from ${details.from || 'Unknown'}`;
+    
+    if (type === 'store_purchase' || type === 'store purchase') {
+      return `Bought ${details.amount || 1}x ${details.resource || 'resource'}`;
+    }
+    
+    if (type === 'daily_claim' || type === 'daily claim') {
+      return `Daily reward (Streak: ${details.streak || 0})`;
+    }
+    
+    if (type === 'purchase') {
+      if (details.package_amount) {
+        return `Package of ${details.package_amount} Coins ($${details.price_usd})`;
+      }
+      if (details.amount_usd) {
+        return (
+          <span className="flex items-center gap-2">
+            Stripe Top-up (${(details.amount_usd / 100).toFixed(2)})
+            {details.invoice_url && (
+              <a href={details.invoice_url} target="_blank" rel="noreferrer" className="text-white/50 hover:text-white transition-colors" title="View Invoice">
+                <FileText className="w-3 h-3" />
+              </a>
+            )}
+          </span>
+        );
+      }
+    }
+
+    if (type === 'spend') {
+      return details.description || 'Spend';
+    }
+
+    return details.description || JSON.stringify(details);
+  };
+
+  const formatTransactionAmount = (txn) => {
+    let isCurrency = false;
+    let isCoins = false;
+
+    if (['credit_purchase', 'bundle_purchase', 'credit_spend', 'spend'].includes(txn.type)) {
+      isCurrency = true;
+    } else if (txn.type === 'purchase' && txn.details?.amount_usd) {
+      isCurrency = true;
+    } else if (
+      ['coin_purchase', 'transfer_sent', 'transfer_received', 'daily_claim', 'daily claim', 'stake_create', 'stake_claim', 'store_purchase', 'store purchase', 'boost_purchase', 'boost_refund', 'boost_extend'].includes(txn.type) ||
+      (txn.type === 'purchase' && txn.details?.package_amount)
+    ) {
+      isCoins = true;
+    }
+
+    const isNegative = txn.amount < 0 || txn.type === 'spend' || txn.type === 'credit_spend';
+    const sign = txn.amount === 0 ? '' : (isNegative ? '-' : '+');
+    const rawAmount = Math.abs(txn.amount);
+
+    if (isCurrency) {
+      return `${sign}${(rawAmount / 100).toFixed(2)}`;
+    } else if (isCoins) {
+      return `${sign}${rawAmount} Coins`;
+    } else {
+      return `${sign}${rawAmount}`;
+    }
+  };
+
   const handleTopUp = async () => {
     try {
       if (!amount || parseFloat(amount) < 1) {
@@ -398,19 +470,12 @@ export default function WalletPage() {
                         </span>
                       </td>
                        <td className="px-4 py-3 text-[#95a1ad]">
-                        {txn.type === 'credit_purchase' ? 'Stripe Top-up' : 
-                         txn.type === 'coin_purchase' ? `${txn.details?.package_amount || 'Unknown'} Coins` :
-                         txn.type === 'transfer_sent' ? `Sent to ${txn.details?.to || 'Unknown'}` :
-                         txn.type === 'transfer_received' ? `Received from ${txn.details?.from || 'Unknown'}` :
-                         txn.details?.description || (txn.details ? JSON.stringify(txn.details) : 'No details available')}
+                        {formatTransactionDetails(txn)}
                       </td>
                       <td className={`px-4 py-3 text-right font-medium ${
-                        txn.amount > 0 ? 'text-emerald-400' : 'text-red-400'
+                        (txn.amount < 0 || (txn.amount > 0 && (txn.type === 'spend' || txn.type === 'credit_spend'))) ? 'text-red-400' : 'text-emerald-400'
                       }`}>
-                        {txn.amount > 0 ? '+' : ''}
-                        {['credit_purchase', 'bundle_purchase', 'credit_spend'].includes(txn.type) ? '$' : ''}
-                        {txn.amount}
-                        {['coin_purchase', 'transfer_sent', 'transfer_received', 'daily_claim', 'stake_create', 'stake_claim', 'store_purchase', 'boost_purchase', 'boost_refund', 'boost_extend'].includes(txn.type) ? ' Coins' : ''}
+                        {formatTransactionAmount(txn)}
                       </td>
                     </tr>
                   ))
