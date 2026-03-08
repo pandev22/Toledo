@@ -1,9 +1,6 @@
 const loadConfig = require("../handlers/config.js");
 const settings = loadConfig("./config.toml");
-const fs = require("fs");
-const indexjs = require("../app.js");
 const axios = require('axios');
-const Queue = require("../handlers/Queue.js");
 const { validate, schemas } = require('../handlers/validate');
 
 const HeliactylModule = {
@@ -39,9 +36,14 @@ const pteroApi = axios.create({
 module.exports.HeliactylModule = HeliactylModule;
 module.exports.load = async function (app, db) {
   app.get(`/api/password`, async (req, res) => {
-    if (!req.session.userinfo.id) return res.redirect("/login");
+    if (!req.session.userinfo || !req.session.userinfo.id) return res.redirect("/login");
 
-    let checkPassword = await db.get("password-" + req.session.userinfo.id);
+    const user = await db.user.findUnique({
+      where: { id: req.session.userinfo.id },
+      select: { sftpPassword: true }
+    });
+
+    let checkPassword = user?.sftpPassword;
 
     if (checkPassword) {
       return res.json({ password: checkPassword });
@@ -56,7 +58,11 @@ module.exports.load = async function (app, db) {
         password: newpassword
       });
 
-      await db.set("password-" + req.session.userinfo.id, newpassword)
+      await db.user.update({
+        where: { id: req.session.userinfo.id },
+        data: { sftpPassword: newpassword }
+      });
+
       return res.json({ password: newpassword });
     }
   });
@@ -66,32 +72,35 @@ module.exports.load = async function (app, db) {
   });
 
   app.get("/notifications", async (req, res) => {
-    if (!req.session.pterodactyl) return res.redirect("/login");
+    if (!req.session.userinfo || !req.session.userinfo.id) return res.redirect("/login");
 
-    let notifications = await db.get('notifications-' + req.session.userinfo.id) || [];
+    const notifications = await db.notification.findMany({
+      where: { userId: req.session.userinfo.id },
+      orderBy: { createdAt: 'desc' }
+    });
 
-    res.json(notifications)
+    res.json(notifications);
   });
 
   app.get("/regen", async (req, res) => {
-    if (!req.session.pterodactyl) return res.redirect("/login");
+    if (!req.session.pterodactyl || !req.session.userinfo) return res.redirect("/login");
     if (settings.api.client.allow.regen !== true) return res.send("You cannot regenerate your password currently.");
 
     let newpassword = makeid(settings.api.client.passwordgenerator["length"]);
     req.session.password = newpassword;
 
-    await updatePassword(req.session.pterodactyl, newpassword, settings, db);
+    await updatePassword(req.session.pterodactyl, req.session.userinfo.id, newpassword, settings, db);
     res.redirect("/security");
   });
 
   app.post("/api/password/change", validate(schemas.passwordChangeDirect), async (req, res) => {
-    if (!req.session.pterodactyl) return res.status(401).json({ error: "Unauthorized" });
+    if (!req.session.pterodactyl || !req.session.userinfo) return res.status(401).json({ error: "Unauthorized" });
     if (!settings.api.client.allow.regen) return res.status(403).json({ error: "Password changes are not allowed" });
 
     const { password } = req.body;
 
     try {
-      await updatePassword(req.session.pterodactyl, password, settings, db);
+      await updatePassword(req.session.pterodactyl, req.session.userinfo.id, password, settings, db);
       res.json({ success: true, message: "Password updated successfully" });
     } catch (error) {
       console.error("Password update error:", error);
@@ -100,16 +109,19 @@ module.exports.load = async function (app, db) {
   });
 
   // Helper function to update password
-  async function updatePassword(userInfo, newPassword, settings, db) {
-    await pteroApi.patch(`/api/application/users/${userInfo.id}`, {
-      username: userInfo.username,
-      email: userInfo.email,
-      first_name: userInfo.first_name,
-      last_name: userInfo.last_name,
+  async function updatePassword(pteroUserInfo, heliactylUserId, newPassword, settings, db) {
+    await pteroApi.patch(`/api/application/users/${pteroUserInfo.id}`, {
+      username: pteroUserInfo.username,
+      email: pteroUserInfo.email,
+      first_name: pteroUserInfo.first_name,
+      last_name: pteroUserInfo.last_name,
       password: newPassword
     });
 
-    await db.set("password-" + userInfo.id, newPassword);
+    await db.user.update({
+      where: { id: heliactylUserId },
+      data: { sftpPassword: newPassword }
+    });
   }
 };
 

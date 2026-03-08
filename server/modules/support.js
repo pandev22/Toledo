@@ -41,11 +41,18 @@ module.exports.HeliactylModule = HeliactylModule;
 module.exports.load = async function (app, db) {
   // Middleware to check admin status
   async function checkAdmin(req, res, settings, db) {
-    if (!req.session.pterodactyl) return false;
+    if (!req.session.userinfo) return false;
 
     try {
+      const user = await db.user.findUnique({
+        where: { id: req.session.userinfo.id },
+        select: { pterodactylId: true }
+      });
+
+      if (!user || !user.pterodactylId) return false;
+
       const response = await pteroApi.get(
-        `/api/application/users/${await db.get("users-" + req.session.userinfo.id)}?include=servers`
+        `/api/application/users/${user.pterodactylId}?include=servers`
       );
 
       return response.data.attributes.root_admin === true;
@@ -63,7 +70,7 @@ module.exports.load = async function (app, db) {
     }
 
     try {
-      const tickets = await db.get('tickets') || [];
+      const tickets = await db.ticket.findMany({ include: { messages: true } });
 
       const stats = {
         total: tickets.length,
@@ -82,7 +89,7 @@ module.exports.load = async function (app, db) {
           abuse: tickets.filter(t => t.category === 'abuse').length
         },
         averageResponseTime: calculateAverageResponseTime(tickets),
-        ticketsLastWeek: tickets.filter(t => t.created > Date.now() - 7 * 24 * 60 * 60 * 1000).length
+        ticketsLastWeek: tickets.filter(t => t.createdAt.getTime() > Date.now() - 7 * 24 * 60 * 60 * 1000).length
       };
 
       res.json(stats);
@@ -93,18 +100,18 @@ module.exports.load = async function (app, db) {
   });
 
   app.post("/api/notifications/:id/read", async (req, res) => {
-    if (!req.session.pterodactyl) return res.status(401).json({ error: "Unauthorized" });
+    if (!req.session.userinfo) return res.status(401).json({ error: "Unauthorized" });
 
     try {
-      let notifications = await db.get(`notifications-${req.session.userinfo.id}`) || [];
-      const notificationIndex = notifications.findIndex(n => n.id === req.params.id);
-
-      if (notificationIndex === -1) {
-        return res.status(404).json({ error: "Notification not found" });
-      }
-
-      notifications[notificationIndex].read = true;
-      await db.set(`notifications-${req.session.userinfo.id}`, notifications);
+      await db.notification.updateMany({
+        where: {
+          id: req.params.id,
+          userId: req.session.userinfo.id
+        },
+        data: {
+          read: true
+        }
+      });
 
       res.json({ success: true });
     } catch (error) {
@@ -115,11 +122,12 @@ module.exports.load = async function (app, db) {
 
   // Get ticket count for user
   app.get("/api/tickets/count", async (req, res) => {
-    if (!req.session.pterodactyl) return res.status(401).json({ error: "Unauthorized" });
+    if (!req.session.userinfo) return res.status(401).json({ error: "Unauthorized" });
 
     try {
-      const tickets = await db.get('tickets') || [];
-      const userTickets = tickets.filter(ticket => ticket.userId === req.session.userinfo.id);
+      const userTickets = await db.ticket.findMany({
+        where: { userId: req.session.userinfo.id }
+      });
 
       const counts = {
         total: userTickets.length,
@@ -141,7 +149,7 @@ module.exports.load = async function (app, db) {
     }
 
     try {
-      const tickets = await db.get('tickets') || [];
+      const tickets = await db.ticket.findMany({ include: { messages: true } });
       const activity = [];
 
       // Get recent messages from all tickets
@@ -151,7 +159,7 @@ module.exports.load = async function (app, db) {
             type: 'message',
             ticketId: ticket.id,
             subject: ticket.subject,
-            timestamp: message.timestamp,
+            timestamp: message.createdAt.getTime(),
             isStaff: message.isStaff,
             content: message.content
           });
@@ -177,28 +185,24 @@ module.exports.load = async function (app, db) {
 
     try {
       const { query, status, priority, category } = req.query;
-      let tickets = await db.get('tickets') || [];
-
-      // Apply filters
+      
+      const where = {};
+      if (status) where.status = status;
+      if (priority) where.priority = priority;
+      if (category) where.category = category;
+      
       if (query) {
-        const searchQuery = query.toLowerCase();
-        tickets = tickets.filter(ticket =>
-          ticket.subject.toLowerCase().includes(searchQuery) ||
-          ticket.messages.some(msg => msg.content.toLowerCase().includes(searchQuery))
-        );
+        where.OR = [
+          { subject: { contains: query } },
+          { messages: { some: { content: { contains: query } } } }
+        ];
       }
 
-      if (status) {
-        tickets = tickets.filter(ticket => ticket.status === status);
-      }
-
-      if (priority) {
-        tickets = tickets.filter(ticket => ticket.priority === priority);
-      }
-
-      if (category) {
-        tickets = tickets.filter(ticket => ticket.category === category);
-      }
+      const tickets = await db.ticket.findMany({
+        where,
+        include: { messages: true },
+        orderBy: { createdAt: 'desc' }
+      });
 
       // Format tickets for display
       const formattedTickets = tickets.map(ticket => formatTicketForDisplay(ticket, false));
@@ -221,11 +225,11 @@ module.exports.load = async function (app, db) {
     }
 
     try {
-      const tickets = await db.get('tickets') || [];
+      const tickets = await db.ticket.findMany({ include: { messages: true } });
       let csv = 'Ticket ID,Subject,Status,Priority,Category,Created,Updated,Messages\n';
 
       tickets.forEach(ticket => {
-        csv += `${ticket.id},${escapeCsvField(ticket.subject)},${ticket.status},${ticket.priority},${ticket.category},${new Date(ticket.created).toISOString()},${new Date(ticket.updated).toISOString()},${ticket.messages.length}\n`;
+        csv += `${ticket.id},${escapeCsvField(ticket.subject)},${ticket.status},${ticket.priority},${ticket.category},${ticket.createdAt.toISOString()},${ticket.updatedAt.toISOString()},${ticket.messages.length}\n`;
       });
 
       res.setHeader('Content-Type', 'text/csv');
@@ -245,45 +249,42 @@ module.exports.load = async function (app, db) {
 
   // Create a new ticket
   app.post("/api/tickets", validate(schemas.ticketCreate), async (req, res) => {
-    if (!req.session.pterodactyl) return res.status(401).json({ error: "Unauthorized" });
+    if (!req.session.userinfo) return res.status(401).json({ error: "Unauthorized" });
 
     try {
       const { subject, description, priority, category } = req.body;
 
-      const ticket = {
-        id: crypto.randomUUID(),
-        userId: req.session.userinfo.id,
-        subject: subject,
-        description: description,
-        priority: priority,
-        category: category,
-        status: 'open',
-        created: Date.now(),
-        updated: Date.now(),
-        messages: [{
-          id: crypto.randomUUID(),
+      const ticket = await db.ticket.create({
+        data: {
+          userId: req.session.userinfo.id,
+          subject: subject,
+          description: description,
+          priority: priority,
+          category: category,
+          status: 'open'
+        },
+        include: { messages: true }
+      });
+
+      const message = await db.ticketMessage.create({
+        data: {
+          ticketId: ticket.id,
           userId: req.session.userinfo.id,
           content: description,
-          timestamp: Date.now(),
           isStaff: false
-        }]
-      };
+        }
+      });
 
-      // Get existing tickets or initialize new array
-      let tickets = await db.get('tickets') || [];
-      tickets.push(ticket);
-      await db.set('tickets', tickets);
+      ticket.messages = [message];
 
       // Create user notification
-      let notifications = await db.get(`notifications-${req.session.userinfo.id}`) || [];
-      notifications.push({
-        id: crypto.randomUUID(),
-        type: 'ticket_created',
-        message: `Ticket #${ticket.id.slice(0, 8)} has been created`,
-        timestamp: Date.now(),
-        read: false
+      await db.notification.create({
+        data: {
+          userId: req.session.userinfo.id,
+          action: 'ticket_created',
+          name: `Ticket #${ticket.id.slice(0, 8)} has been created`
+        }
       });
-      await db.set(`notifications-${req.session.userinfo.id}`, notifications);
 
       res.status(201).json(ticket);
     } catch (error) {
@@ -299,36 +300,30 @@ module.exports.load = async function (app, db) {
     }
 
     try {
-      const tickets = await db.get('tickets') || [];
       const { page, perPage } = getPaginationParams(req.query);
-
-      // Add user information to each ticket
-      const ticketsWithUserInfo = await Promise.all(tickets.map(async (ticket) => {
-        try {
-          const response = await pteroApi.get(
-            `/api/application/users/${await db.get("users-" + ticket.userId)}`
-          );
-
-          return {
-            ...ticket,
-            user: {
-              username: response.data.attributes.username,
-              email: response.data.attributes.email
+      const tickets = await db.ticket.findMany({
+        include: { 
+          messages: true,
+          user: {
+            select: {
+              username: true,
+              email: true
             }
-          };
-        } catch (error) {
-          return {
-            ...ticket,
-            user: {
-              username: 'Unknown',
-              email: 'unknown@example.com'
-            }
-          };
-        }
-      }));
+          }
+        },
+        orderBy: { createdAt: 'desc' }
+      });
+
+      const formattedTickets = tickets.map(ticket => {
+        const formatted = formatTicketForDisplay(ticket, false);
+        return {
+          ...formatted,
+          user: ticket.user || { username: 'Unknown', email: 'unknown@example.com' }
+        };
+      });
 
       // Paginate results
-      const paginatedResult = paginate(ticketsWithUserInfo, page, perPage);
+      const paginatedResult = paginate(formattedTickets, page, perPage);
       res.json(paginatedResult);
     } catch (error) {
       console.error("Error fetching tickets:", error);
@@ -338,15 +333,18 @@ module.exports.load = async function (app, db) {
 
   // Get user's tickets with pagination
   app.get("/api/tickets", async (req, res) => {
-    if (!req.session.pterodactyl) return res.status(401).json({ error: "Unauthorized" });
+    if (!req.session.userinfo) return res.status(401).json({ error: "Unauthorized" });
 
     try {
-      const tickets = await db.get('tickets') || [];
-      const userTickets = tickets.filter(ticket => ticket.userId === req.session.userinfo.id);
       const { page, perPage } = getPaginationParams(req.query);
+      const userTickets = await db.ticket.findMany({
+        where: { userId: req.session.userinfo.id },
+        include: { messages: true },
+        orderBy: { createdAt: 'desc' }
+      });
       
       // Paginate results
-      const paginatedResult = paginate(userTickets, page, perPage);
+      const paginatedResult = paginate(userTickets.map(t => formatTicketForDisplay(t)), page, perPage);
       res.json(paginatedResult);
     } catch (error) {
       console.error("Error fetching user tickets:", error);
@@ -356,11 +354,13 @@ module.exports.load = async function (app, db) {
 
   // Get specific ticket
   app.get("/api/tickets/:id", async (req, res) => {
-    if (!req.session.pterodactyl) return res.status(401).json({ error: "Unauthorized" });
+    if (!req.session.userinfo) return res.status(401).json({ error: "Unauthorized" });
 
     try {
-      const tickets = await db.get('tickets') || [];
-      const ticket = tickets.find(t => t.id === req.params.id);
+      const ticket = await db.ticket.findUnique({
+        where: { id: req.params.id },
+        include: { messages: { orderBy: { createdAt: 'asc' } } }
+      });
 
       if (!ticket) {
         return res.status(404).json({ error: "Ticket not found" });
@@ -372,7 +372,7 @@ module.exports.load = async function (app, db) {
         return res.status(403).json({ error: "Unauthorized" });
       }
 
-      res.json(ticket);
+      res.json(formatTicketForDisplay(ticket));
     } catch (error) {
       console.error("Error fetching ticket:", error);
       res.status(500).json({ error: "Internal server error" });
@@ -381,19 +381,19 @@ module.exports.load = async function (app, db) {
 
   // Add message to ticket
   app.post("/api/tickets/:id/messages", validate(schemas.ticketMessage), async (req, res) => {
-    if (!req.session.pterodactyl) return res.status(401).json({ error: "Unauthorized" });
+    if (!req.session.userinfo) return res.status(401).json({ error: "Unauthorized" });
 
     try {
       const { content } = req.body;
 
-      let tickets = await db.get('tickets') || [];
-      const ticketIndex = tickets.findIndex(t => t.id === req.params.id);
+      const ticket = await db.ticket.findUnique({
+        where: { id: req.params.id }
+      });
 
-      if (ticketIndex === -1) {
+      if (!ticket) {
         return res.status(404).json({ error: "Ticket not found" });
       }
 
-      const ticket = tickets[ticketIndex];
       const isAdmin = await checkAdmin(req, res, settings, db);
 
       // Check if user owns ticket or is admin
@@ -401,36 +401,50 @@ module.exports.load = async function (app, db) {
         return res.status(403).json({ error: "Unauthorized" });
       }
 
-      const message = {
-        id: crypto.randomUUID(),
-        userId: req.session.userinfo.id,
-        content: content,
-        timestamp: Date.now(),
-        isStaff: isAdmin
-      };
+      const message = await db.ticketMessage.create({
+        data: {
+          ticketId: ticket.id,
+          userId: req.session.userinfo.id,
+          content: content,
+          isStaff: isAdmin
+        }
+      });
 
-      ticket.messages.push(message);
-      ticket.updated = Date.now();
-      ticket.status = 'open'; // Reopen ticket if it was closed
-
-      tickets[ticketIndex] = ticket;
-      await db.set('tickets', tickets);
+      await db.ticket.update({
+        where: { id: ticket.id },
+        data: { status: 'open' }
+      });
 
       // Create notification for the other party
-      const notifyUserId = isAdmin ? ticket.userId : await db.get("admin-notifications");
-      if (notifyUserId) {
-        let notifications = await db.get(`notifications-${notifyUserId}`) || [];
-        notifications.push({
-          id: crypto.randomUUID(),
-          type: 'ticket_reply',
-          message: `New reply on ticket #${ticket.id.slice(0, 8)}`,
-          timestamp: Date.now(),
-          read: false
-        });
-        await db.set(`notifications-${notifyUserId}`, notifications);
+      let notifyUserId = null;
+      if (isAdmin) {
+        notifyUserId = ticket.userId;
+      } else {
+        const adminNotifRecord = await db.heliactyl.findUnique({ where: { key: "admin-notifications" } });
+        if (adminNotifRecord) {
+          try {
+            notifyUserId = JSON.parse(adminNotifRecord.value);
+          } catch {
+            notifyUserId = adminNotifRecord.value;
+          }
+        }
       }
 
-      res.json(message);
+      if (notifyUserId) {
+        await db.notification.create({
+          data: {
+            userId: notifyUserId,
+            action: 'ticket_reply',
+            name: `New reply on ticket #${ticket.id.slice(0, 8)}`
+          }
+        });
+      }
+
+      res.json({
+        ...message,
+        timestamp: message.createdAt.getTime(),
+        timeAgo: getTimeAgo(message.createdAt)
+      });
     } catch (error) {
       console.error("Error adding message:", error);
       res.status(500).json({ error: "Internal server error" });
@@ -439,19 +453,19 @@ module.exports.load = async function (app, db) {
 
   // Update ticket status (open/closed)
   app.patch("/api/tickets/:id/status", validate(schemas.ticketStatus), async (req, res) => {
-    if (!req.session.pterodactyl) return res.status(401).json({ error: "Unauthorized" });
+    if (!req.session.userinfo) return res.status(401).json({ error: "Unauthorized" });
 
     try {
       const { status } = req.body;
 
-      let tickets = await db.get('tickets') || [];
-      const ticketIndex = tickets.findIndex(t => t.id === req.params.id);
+      const ticket = await db.ticket.findUnique({
+        where: { id: req.params.id }
+      });
 
-      if (ticketIndex === -1) {
+      if (!ticket) {
         return res.status(404).json({ error: "Ticket not found" });
       }
 
-      const ticket = tickets[ticketIndex];
       const isAdmin = await checkAdmin(req, res, settings, db);
 
       // Check if user owns ticket or is admin
@@ -459,36 +473,52 @@ module.exports.load = async function (app, db) {
         return res.status(403).json({ error: "Unauthorized" });
       }
 
-      ticket.status = status;
-      ticket.updated = Date.now();
-
-      // Add system message about status change
-      ticket.messages.push({
-        id: crypto.randomUUID(),
-        userId: req.session.userinfo.id,
-        content: `Ticket ${status} by ${isAdmin ? 'staff' : 'user'}`,
-        timestamp: Date.now(),
-        isSystem: true
+      await db.ticket.update({
+        where: { id: ticket.id },
+        data: { status }
       });
 
-      tickets[ticketIndex] = ticket;
-      await db.set('tickets', tickets);
+      // Add system message about status change
+      await db.ticketMessage.create({
+        data: {
+          ticketId: ticket.id,
+          userId: req.session.userinfo.id,
+          content: `Ticket ${status} by ${isAdmin ? 'staff' : 'user'}`,
+          isSystem: true
+        }
+      });
 
       // Create notification for the other party
-      const notifyUserId = isAdmin ? ticket.userId : await db.get("admin-notifications");
-      if (notifyUserId) {
-        let notifications = await db.get(`notifications-${notifyUserId}`) || [];
-        notifications.push({
-        id: crypto.randomUUID(),
-          type: 'ticket_status',
-          message: `Ticket #${ticket.id.slice(0, 8)} has been ${status}`,
-          timestamp: Date.now(),
-          read: false
-        });
-        await db.set(`notifications-${notifyUserId}`, notifications);
+      let notifyUserId = null;
+      if (isAdmin) {
+        notifyUserId = ticket.userId;
+      } else {
+        const adminNotifRecord = await db.heliactyl.findUnique({ where: { key: "admin-notifications" } });
+        if (adminNotifRecord) {
+          try {
+            notifyUserId = JSON.parse(adminNotifRecord.value);
+          } catch {
+            notifyUserId = adminNotifRecord.value;
+          }
+        }
       }
 
-      res.json(ticket);
+      if (notifyUserId) {
+        await db.notification.create({
+          data: {
+            userId: notifyUserId,
+            action: 'ticket_status',
+            name: `Ticket #${ticket.id.slice(0, 8)} has been ${status}`
+          }
+        });
+      }
+
+      const updatedTicket = await db.ticket.findUnique({
+        where: { id: ticket.id },
+        include: { messages: true }
+      });
+
+      res.json(formatTicketForDisplay(updatedTicket));
     } catch (error) {
       console.error("Error updating ticket status:", error);
       res.status(500).json({ error: "Internal server error" });
@@ -504,41 +534,44 @@ module.exports.load = async function (app, db) {
     try {
       const { priority } = req.body;
 
-      let tickets = await db.get('tickets') || [];
-      const ticketIndex = tickets.findIndex(t => t.id === req.params.id);
+      const ticket = await db.ticket.findUnique({
+        where: { id: req.params.id }
+      });
 
-      if (ticketIndex === -1) {
+      if (!ticket) {
         return res.status(404).json({ error: "Ticket not found" });
       }
 
-      const ticket = tickets[ticketIndex];
-      ticket.priority = priority;
-      ticket.updated = Date.now();
+      await db.ticket.update({
+        where: { id: ticket.id },
+        data: { priority }
+      });
 
       // Add system message about priority change
-      ticket.messages.push({
-        id: crypto.randomUUID(),
-        userId: req.session.userinfo.id,
-        content: `Ticket priority changed to ${priority}`,
-        timestamp: Date.now(),
-        isSystem: true
+      await db.ticketMessage.create({
+        data: {
+          ticketId: ticket.id,
+          userId: req.session.userinfo.id,
+          content: `Ticket priority changed to ${priority}`,
+          isSystem: true
+        }
       });
-
-      tickets[ticketIndex] = ticket;
-      await db.set('tickets', tickets);
 
       // Notify user of priority change
-      let notifications = await db.get(`notifications-${ticket.userId}`) || [];
-      notifications.push({
-        id: crypto.randomUUID(),
-        type: 'ticket_priority',
-        message: `Ticket #${ticket.id.slice(0, 8)} priority changed to ${priority}`,
-        timestamp: Date.now(),
-        read: false
+      await db.notification.create({
+        data: {
+          userId: ticket.userId,
+          action: 'ticket_priority',
+          name: `Ticket #${ticket.id.slice(0, 8)} priority changed to ${priority}`
+        }
       });
-      await db.set(`notifications-${ticket.userId}`, notifications);
 
-      res.json(ticket);
+      const updatedTicket = await db.ticket.findUnique({
+        where: { id: ticket.id },
+        include: { messages: true }
+      });
+
+      res.json(formatTicketForDisplay(updatedTicket));
     } catch (error) {
       console.error("Error updating ticket priority:", error);
       res.status(500).json({ error: "Internal server error" });
@@ -559,7 +592,7 @@ function calculateAverageResponseTime(tickets) {
 
         // Only count response time if messages are from different users
         if (currentMessage.userId !== previousMessage.userId) {
-          totalResponseTime += currentMessage.timestamp - previousMessage.timestamp;
+          totalResponseTime += currentMessage.createdAt.getTime() - previousMessage.createdAt.getTime();
           responsesCount++;
         }
       }
@@ -577,18 +610,18 @@ function formatTicketForDisplay(ticket, includeMessages = true) {
     status: ticket.status,
     priority: ticket.priority,
     category: ticket.category,
-    created: ticket.created,
-    updated: ticket.updated,
+    created: ticket.createdAt.getTime(),
+    updated: ticket.updatedAt.getTime(),
     displayId: ticket.id.slice(0, 8).toUpperCase(),
-    timeAgo: getTimeAgo(ticket.updated)
+    timeAgo: getTimeAgo(ticket.updatedAt)
   };
 
-  if (includeMessages) {
+  if (includeMessages && ticket.messages) {
     displayTicket.messages = ticket.messages.map(msg => ({
       id: msg.id,
       content: msg.content,
-      timestamp: msg.timestamp,
-      timeAgo: getTimeAgo(msg.timestamp),
+      timestamp: msg.createdAt.getTime(),
+      timeAgo: getTimeAgo(msg.createdAt),
       isStaff: msg.isStaff,
       isSystem: msg.isSystem
     }));
@@ -599,7 +632,8 @@ function formatTicketForDisplay(ticket, includeMessages = true) {
 
 // Helper function to get time ago string
 function getTimeAgo(timestamp) {
-  const seconds = Math.floor((Date.now() - timestamp) / 1000);
+  const date = new Date(timestamp);
+  const seconds = Math.floor((Date.now() - date.getTime()) / 1000);
 
   const intervals = {
     year: 31536000,

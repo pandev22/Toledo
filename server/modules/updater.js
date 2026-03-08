@@ -38,8 +38,8 @@ async function checkAdminStatus(req, res, db) {
   }
 
   try {
-    const userId = await db.get("users-" + req.session.userinfo.id);
-    const response = await pteroApi.get(`/api/application/users/${userId}?include=servers`);
+    const pterodactylId = (await db.user.findUnique({ where: { id: req.session.userinfo.id }, select: { pterodactylId: true } }))?.pterodactylId;
+    const response = await pteroApi.get(`/api/application/users/${pterodactylId}?include=servers`);
     const isAdmin = response.data.attributes.root_admin === true;
 
     req.session[cacheKey] = {
@@ -54,8 +54,10 @@ async function checkAdminStatus(req, res, db) {
   }
 }
 
-const HeliactylModule = {
+
+  const HeliactylModule = {
   name: "Updater",
+
   version: "1.0.0",
   api_level: 4,
   target_platform: "10.0.0",
@@ -193,23 +195,40 @@ class UpdateManager {
 
   async getConfig() {
     try {
-      const config = await this.db.get(DB_KEYS.config);
+      const row = await this.db.heliactyl.findUnique({ where: { key: DB_KEYS.config } });
+      const config = row ? JSON.parse(row.value) : null;
       return config ? { ...DEFAULT_CONFIG, ...config } : DEFAULT_CONFIG;
     } catch {
       return DEFAULT_CONFIG;
     }
   }
 
+
+
+
+
+
+
+
+
+
+
+
   async setConfig(newConfig) {
     const current = await this.getConfig();
     const merged = { ...current, ...newConfig };
-    await this.db.set(DB_KEYS.config, merged);
+    await this.db.heliactyl.upsert({
+      where: { key: DB_KEYS.config },
+      update: { value: JSON.stringify(merged) },
+      create: { key: DB_KEYS.config, value: JSON.stringify(merged) }
+    });
     return merged;
   }
 
   async registerServer() {
     try {
-      const servers = (await this.db.get(DB_KEYS.servers)) || {};
+      const row = await this.db.heliactyl.findUnique({ where: { key: DB_KEYS.servers } });
+      const servers = row ? JSON.parse(row.value) : {};
       // Preserve existing nickname if server was already registered
       const existingServer = servers[this.hostname];
       servers[this.hostname] = {
@@ -219,7 +238,11 @@ class UpdateManager {
         updatedAt: Date.now(),
         updating: this.updating
       };
-      await this.db.set(DB_KEYS.servers, servers);
+      await this.db.heliactyl.upsert({
+        where: { key: DB_KEYS.servers },
+        update: { value: JSON.stringify(servers) },
+        create: { key: DB_KEYS.servers, value: JSON.stringify(servers) }
+      });
     } catch (error) {
       logger.error("Failed to register server:", error);
     }
@@ -227,7 +250,8 @@ class UpdateManager {
 
   async getServers() {
     try {
-      const servers = (await this.db.get(DB_KEYS.servers)) || {};
+      const row = await this.db.heliactyl.findUnique({ where: { key: DB_KEYS.servers } });
+      const servers = row ? JSON.parse(row.value) : {};
       const now = Date.now();
       const ONLINE_THRESHOLD = 30 * 60 * 1000; // 30 minutes - consider offline if no heartbeat
       const CLEANUP_THRESHOLD = 72 * 60 * 60 * 1000; // 72 hours - remove stale entries
@@ -249,7 +273,11 @@ class UpdateManager {
       
       // Save cleaned servers if any were removed
       if (Object.keys(cleanedServers).length !== Object.keys(servers).length) {
-        await this.db.set(DB_KEYS.servers, cleanedServers);
+        await this.db.heliactyl.upsert({
+          where: { key: DB_KEYS.servers },
+          update: { value: JSON.stringify(cleanedServers) },
+          create: { key: DB_KEYS.servers, value: JSON.stringify(cleanedServers) }
+        });
       }
       
       return Object.values(cleanedServers);
@@ -261,10 +289,15 @@ class UpdateManager {
   // Update server nickname
   async updateServerName(hostname, name) {
     try {
-      const servers = (await this.db.get(DB_KEYS.servers)) || {};
+      const row = await this.db.heliactyl.findUnique({ where: { key: DB_KEYS.servers } });
+      const servers = row ? JSON.parse(row.value) : {};
       if (servers[hostname]) {
         servers[hostname].name = name || hostname;
-        await this.db.set(DB_KEYS.servers, servers);
+        await this.db.heliactyl.upsert({
+          where: { key: DB_KEYS.servers },
+          update: { value: JSON.stringify(servers) },
+          create: { key: DB_KEYS.servers, value: JSON.stringify(servers) }
+        });
         return true;
       }
       return false;
@@ -277,10 +310,15 @@ class UpdateManager {
   // Delete a server entry manually
   async deleteServer(hostname) {
     try {
-      const servers = (await this.db.get(DB_KEYS.servers)) || {};
+      const row = await this.db.heliactyl.findUnique({ where: { key: DB_KEYS.servers } });
+      const servers = row ? JSON.parse(row.value) : {};
       if (servers[hostname]) {
         delete servers[hostname];
-        await this.db.set(DB_KEYS.servers, servers);
+        await this.db.heliactyl.upsert({
+          where: { key: DB_KEYS.servers },
+          update: { value: JSON.stringify(servers) },
+          create: { key: DB_KEYS.servers, value: JSON.stringify(servers) }
+        });
         return true;
       }
       return false;
@@ -291,6 +329,7 @@ class UpdateManager {
   }
 
   setupRoutes(app) {
+
     app.get("/api/admin/updater/config", async (req, res) => {
       if (!await checkAdminStatus(req, res, this.db)) return res.status(403).json({ error: "Forbidden" });
       try {

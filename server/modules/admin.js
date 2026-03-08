@@ -34,7 +34,8 @@ async function checkAdminStatus(req, res, settings, db) {
   }
 
   try {
-    const userId = await db.get("users-" + req.session.userinfo.id);
+    const user = await db.user.findUnique({ where: { id: req.session.userinfo.id }, select: { pterodactylId: true } });
+    const userId = user?.pterodactylId;
     const response = await pteroApi.get(`/api/application/users/${userId}?include=servers`);
     const isAdmin = response.data.attributes.root_admin === true;
 
@@ -427,7 +428,8 @@ module.exports.load = async function (app, db) {
     }
 
     try {
-      const nodes = await db.get("radar-nodes") || [];
+      const result = await db.heliactyl.findUnique({ where: { key: "radar-nodes" } });
+      const nodes = JSON.parse(result?.value || "[]");
 
       // Check status of each node
       const nodesWithStatus = await Promise.all(nodes.map(async (node) => {
@@ -463,7 +465,8 @@ module.exports.load = async function (app, db) {
     }
 
     try {
-      const nodes = await db.get("radar-nodes") || [];
+      const result = await db.heliactyl.findUnique({ where: { key: "radar-nodes" } });
+      const nodes = JSON.parse(result?.value || "[]");
       const node = nodes.find(n => n.id === req.params.id);
 
       if (!node) return res.status(404).json({ error: "Node not found" });
@@ -499,7 +502,8 @@ module.exports.load = async function (app, db) {
     try {
       const { name, fqdn, port, webhookUrl } = req.body;
 
-      const nodes = await db.get("radar-nodes") || [];
+      const result = await db.heliactyl.findUnique({ where: { key: "radar-nodes" } });
+      const nodes = JSON.parse(result?.value || "[]");
       const id = Math.random().toString(36).substring(2, 15);
 
       const newNode = {
@@ -512,7 +516,7 @@ module.exports.load = async function (app, db) {
       };
 
       nodes.push(newNode);
-      await db.set("radar-nodes", nodes);
+      await db.heliactyl.upsert({ where: { key: "radar-nodes" }, create: { key: "radar-nodes", value: JSON.stringify(nodes) }, update: { value: JSON.stringify(nodes) } });
 
       log(
         "radar node added",
@@ -533,7 +537,8 @@ module.exports.load = async function (app, db) {
     }
 
     try {
-      const nodes = await db.get("radar-nodes") || [];
+      const result = await db.heliactyl.findUnique({ where: { key: "radar-nodes" } });
+      const nodes = JSON.parse(result?.value || "[]");
       const nodeIndex = nodes.findIndex(n => n.id === req.params.id);
 
       if (nodeIndex === -1) return res.status(404).json({ error: "Node not found" });
@@ -545,7 +550,7 @@ module.exports.load = async function (app, db) {
       };
 
       nodes[nodeIndex] = updatedNode;
-      await db.set("radar-nodes", nodes);
+      await db.heliactyl.upsert({ where: { key: "radar-nodes" }, create: { key: "radar-nodes", value: JSON.stringify(nodes) }, update: { value: JSON.stringify(nodes) } });
 
       log(
         "radar node updated",
@@ -566,14 +571,15 @@ module.exports.load = async function (app, db) {
     }
 
     try {
-      const nodes = await db.get("radar-nodes") || [];
+      const result = await db.heliactyl.findUnique({ where: { key: "radar-nodes" } });
+      const nodes = JSON.parse(result?.value || "[]");
       const nodeIndex = nodes.findIndex(n => n.id === req.params.id);
 
       if (nodeIndex === -1) return res.status(404).json({ error: "Node not found" });
 
       const deletedNode = nodes[nodeIndex];
       nodes.splice(nodeIndex, 1);
-      await db.set("radar-nodes", nodes);
+      await db.heliactyl.upsert({ where: { key: "radar-nodes" }, create: { key: "radar-nodes", value: JSON.stringify(nodes) }, update: { value: JSON.stringify(nodes) } });
 
       log(
         "radar node deleted",
@@ -594,7 +600,8 @@ module.exports.load = async function (app, db) {
     }
 
     try {
-      const nodes = await db.get("radar-nodes") || [];
+      const result = await db.heliactyl.findUnique({ where: { key: "radar-nodes" } });
+      const nodes = JSON.parse(result?.value || "[]");
 
       // Collect stats from all online nodes
       const nodeStats = await Promise.all(nodes.map(async (node) => {
@@ -651,7 +658,8 @@ module.exports.load = async function (app, db) {
     }
 
     try {
-      const nodes = await db.get("radar-nodes") || [];
+      const result = await db.heliactyl.findUnique({ where: { key: "radar-nodes" } });
+      const nodes = JSON.parse(result?.value || "[]");
       const node = nodes.find(n => n.id === req.params.id);
 
       if (!node) return res.status(404).json({ error: "Node not found" });
@@ -943,29 +951,6 @@ module.exports.load = async function (app, db) {
     }
   });
 
-  // Add these helper function and endpoints
-
-  // Helper function to get Heliactyl Next user ID from Pterodactyl ID
-  async function getgetHeliactylUserId(pterodactylId, db) {
-    try {
-      // Get all keys starting with users-
-      const keys = await db.getAll();
-
-      // Look for the user mapping
-      for (const [key, value] of Object.entries(keys)) {
-        if (key.startsWith('users-') && value === parseInt(pterodactylId)) {
-          const userId = key.replace('users-', '');
-          return userId;
-        }
-      }
-
-      return null;
-    } catch (error) {
-      console.error("Error getting Heliactyl Next user ID:", error);
-      return null;
-    }
-  }
-
   // Get multiple users' coins in bulk (MUST be before /api/users/:id/coins)
   app.get("/api/users/bulk/coins", async (req, res) => {
     if (!await checkAdminStatus(req, res, settings, db)) {
@@ -978,37 +963,19 @@ module.exports.load = async function (app, db) {
         return res.status(400).json({ error: "Missing ids parameter" });
       }
 
-      const userIds = ids.split(',').map(id => id.trim()).filter(id => id);
-      if (userIds.length === 0) {
+      const pterodactylIds = ids.split(',').map(id => id.trim()).filter(id => id).map(id => parseInt(id));
+      if (pterodactylIds.length === 0) {
         return res.status(400).json({ error: "Invalid ids parameter" });
       }
 
-      // Single DB call to get all mappings
-      const allKeys = await db.getAll();
-      const userMappings = {};
-      
-      for (const [key, value] of Object.entries(allKeys)) {
-        if (key.startsWith('users-')) {
-          userMappings[value] = key.replace('users-', '');
-        }
-      }
+      const users = await db.user.findMany({
+        where: { pterodactylId: { in: pterodactylIds } },
+        select: { pterodactylId: true, coins: true }
+      });
 
-      // Build results
       const results = {};
-      for (const pterodactylId of userIds) {
-        const pteroId = parseInt(pterodactylId);
-        let userId = null;
-        
-        // Direct check first (user provided Heliactyl ID)
-        if (allKeys['users-' + pterodactylId]) {
-          userId = pterodactylId;
-        } else if (userMappings[pteroId]) {
-          userId = userMappings[pteroId];
-        }
-        
-        if (userId) {
-          results[pterodactylId] = await db.get("coins-" + userId) || 0;
-        }
+      for (const user of users) {
+        results[user.pterodactylId] = user.coins;
       }
 
       res.json(results);
@@ -1030,39 +997,24 @@ module.exports.load = async function (app, db) {
         return res.status(400).json({ error: "Missing ids parameter" });
       }
 
-      const userIds = ids.split(',').map(id => id.trim()).filter(id => id);
-      if (userIds.length === 0) {
+      const pterodactylIds = ids.split(',').map(id => id.trim()).filter(id => id).map(id => parseInt(id));
+      if (pterodactylIds.length === 0) {
         return res.status(400).json({ error: "Invalid ids parameter" });
       }
 
-      // Single DB call to get all mappings
-      const allKeys = await db.getAll();
-      const userMappings = {};
-      
-      for (const [key, value] of Object.entries(allKeys)) {
-        if (key.startsWith('users-')) {
-          userMappings[value] = key.replace('users-', '');
-        }
-      }
+      const users = await db.user.findMany({
+        where: { pterodactylId: { in: pterodactylIds } },
+        select: { pterodactylId: true, extraRam: true, extraDisk: true, extraCpu: true, extraServers: true }
+      });
 
-      // Build results
       const results = {};
-      for (const pterodactylId of userIds) {
-        const pteroId = parseInt(pterodactylId);
-        let userId = null;
-        
-        // Direct check first (user provided Heliactyl ID)
-        if (allKeys['users-' + pterodactylId]) {
-          userId = pterodactylId;
-        } else if (userMappings[pteroId]) {
-          userId = userMappings[pteroId];
-        }
-        
-        if (userId) {
-          results[pterodactylId] = await db.get("extra-" + userId) || {
-            ram: 0, disk: 0, cpu: 0, servers: 0
-          };
-        }
+      for (const user of users) {
+        results[user.pterodactylId] = {
+          ram: user.extraRam,
+          disk: user.extraDisk,
+          cpu: user.extraCpu,
+          servers: user.extraServers
+        };
       }
 
       res.json(results);
@@ -1080,25 +1032,16 @@ module.exports.load = async function (app, db) {
 
     try {
       const pterodactylId = req.params.id;
+      const user = await db.user.findFirst({
+        where: { OR: [{ id: pterodactylId }, { pterodactylId: parseInt(pterodactylId) }] },
+        select: { coins: true }
+      });
 
-      // First check if this is already a Heliactyl Next user ID
-      const directCheck = await db.get("users-" + pterodactylId);
-      let userId;
-
-      if (directCheck) {
-        // The ID provided was a Heliactyl Next user ID
-        userId = pterodactylId;
-      } else {
-        // Try to find the Heliactyl Next user ID from Pterodactyl ID
-        userId = await getgetHeliactylUserId(pterodactylId, db);
-      }
-
-      if (!userId) {
+      if (!user) {
         return res.status(404).json({ error: "User not found" });
       }
 
-      const coins = await db.get("coins-" + userId) || 0;
-      res.json({ coins: coins });
+      res.json({ coins: user.coins });
     } catch (error) {
       console.error("Error fetching user coins:", error);
       res.status(500).json({ error: "Internal server error" });
@@ -1113,31 +1056,21 @@ module.exports.load = async function (app, db) {
 
     try {
       const pterodactylId = req.params.id;
+      const user = await db.user.findFirst({
+        where: { OR: [{ id: pterodactylId }, { pterodactylId: parseInt(pterodactylId) }] },
+        select: { extraRam: true, extraDisk: true, extraCpu: true, extraServers: true }
+      });
 
-      // First check if this is already a Heliactyl Next user ID
-      const directCheck = await db.get("users-" + pterodactylId);
-      let userId;
-
-      if (directCheck) {
-        // The ID provided was a Heliactyl Next user ID
-        userId = pterodactylId;
-      } else {
-        // Try to find the Heliactyl Next user ID from Pterodactyl ID
-        userId = await getgetHeliactylUserId(pterodactylId, db);
-      }
-
-      if (!userId) {
+      if (!user) {
         return res.status(404).json({ error: "User not found" });
       }
 
-      const resources = await db.get("extra-" + userId) || {
-        ram: 0,
-        disk: 0,
-        cpu: 0,
-        servers: 0
-      };
-
-      res.json(resources);
+      res.json({
+        ram: user.extraRam,
+        disk: user.extraDisk,
+        cpu: user.extraCpu,
+        servers: user.extraServers
+      });
     } catch (error) {
       console.error("Error fetching user resources:", error);
       res.status(500).json({ error: "Internal server error" });
@@ -1147,37 +1080,25 @@ module.exports.load = async function (app, db) {
   app.get("/api/users/:id/addcoins/:coins", async (req, res) => {
     try {
       const pterodactylId = req.params.id;
+      const user = await db.user.findFirst({
+        where: { OR: [{ id: pterodactylId }, { pterodactylId: parseInt(pterodactylId) }] }
+      });
 
-      // First check if this is already a Heliactyl Next user ID
-      const directCheck = await db.get("users-" + pterodactylId);
-      let userId;
-      if (directCheck) {
-        // The ID provided was a Heliactyl Next user ID
-        userId = pterodactylId;
-      } else {
-        // Try to find the Heliactyl Next user ID from Pterodactyl ID
-        userId = await getgetHeliactylUserId(pterodactylId, db);
-      }
-
-      if (!userId) {
+      if (!user) {
         return res.status(404).json({ error: "User not found" });
       }
 
-      // Correctly parse the coins parameter
-      const coins = parseInt(req.params.coins);
-      if (isNaN(coins) || coins < 0 || coins > 999999999999999) {
+      const coinsToAdd = parseInt(req.params.coins);
+      if (isNaN(coinsToAdd) || coinsToAdd < 0 || coinsToAdd > 999999999999999) {
         return res.status(400).json({ error: "Invalid coin amount" });
       }
 
-      let current = await db.get("coins-" + userId) || 0;  // Add default value of 0
+      const updatedUser = await db.user.update({
+        where: { id: user.id },
+        data: { coins: user.coins + coinsToAdd }
+      });
 
-      if (coins === 0) {
-        await db.delete("coins-" + userId);
-      } else {
-        await db.set("coins-" + userId, current + coins);
-      }
-
-      res.json({ success: true, coins: current + coins });
+      res.json({ success: true, coins: updatedUser.coins });
     } catch (error) {
       console.error("Error updating user coins:", error);
       res.status(500).json({ error: "Internal server error" });
@@ -1192,34 +1113,23 @@ module.exports.load = async function (app, db) {
 
     try {
       const pterodactylId = req.params.id;
+      const user = await db.user.findFirst({
+        where: { OR: [{ id: pterodactylId }, { pterodactylId: parseInt(pterodactylId) }] }
+      });
 
-      // First check if this is already a Heliactyl Next user ID
-      const directCheck = await db.get("users-" + pterodactylId);
-      let userId;
-
-      if (directCheck) {
-        // The ID provided was a Heliactyl Next user ID
-        userId = pterodactylId;
-      } else {
-        // Try to find the Heliactyl Next user ID from Pterodactyl ID
-        userId = await getgetHeliactylUserId(pterodactylId, db);
-      }
-
-      if (!userId) {
+      if (!user) {
         return res.status(404).json({ error: "User not found" });
       }
 
       const { coins } = req.body;
-
-      if (coins === 0) {
-        await db.delete("coins-" + userId);
-      } else {
-        await db.set("coins-" + userId, coins);
-      }
+      await db.user.update({
+        where: { id: user.id },
+        data: { coins: coins }
+      });
 
       log(
         "coins updated",
-        `${req.session.userinfo.username} updated coins to ${coins} for user ID ${userId}`
+        `${req.session.userinfo.username} updated coins to ${coins} for user ID ${user.id}`
       );
 
       res.json({ success: true, coins });
@@ -1237,37 +1147,30 @@ module.exports.load = async function (app, db) {
 
     try {
       const pterodactylId = req.params.id;
+      const user = await db.user.findFirst({
+        where: { OR: [{ id: pterodactylId }, { pterodactylId: parseInt(pterodactylId) }] }
+      });
 
-      // First check if this is already a Heliactyl Next user ID
-      const directCheck = await db.get("users-" + pterodactylId);
-      let userId;
-
-      if (directCheck) {
-        // The ID provided was a Heliactyl Next user ID
-        userId = pterodactylId;
-      } else {
-        // Try to find the Heliactyl Next user ID from Pterodactyl ID
-        userId = await getgetHeliactylUserId(pterodactylId, db);
-      }
-
-      if (!userId) {
+      if (!user) {
         return res.status(404).json({ error: "User not found" });
       }
 
       const resources = req.body;
+      await db.user.update({
+        where: { id: user.id },
+        data: {
+          extraRam: resources.ram,
+          extraDisk: resources.disk,
+          extraCpu: resources.cpu,
+          extraServers: resources.servers
+        }
+      });
 
-      if (Object.values(resources).every(v => v === 0)) {
-        await db.delete("extra-" + userId);
-      } else {
-        await db.set("extra-" + userId, resources);
-      }
-
-      // Handle server suspension
-      await suspendIfNeeded(userId, settings, db);
+      await suspendIfNeeded(user.id, settings, db);
 
       log(
         "resources updated",
-        `${req.session.userinfo.username} updated resources for user ID ${userId}`
+        `${req.session.userinfo.username} updated resources for user ID ${user.id}`
       );
 
       res.json({ success: true, ...resources });
@@ -1412,40 +1315,18 @@ module.exports.load = async function (app, db) {
   });
 };
 
-// Utility function to handle reboot
-async function handleReboot() {
-  // Kill child processes
-  if (global.tailwindProcess) {
-    global.tailwindProcess.kill();
-  }
-
-  // Close DB connection
-  if (db && typeof db.close === 'function') {
-    db.close();
-  }
-
-  // Close Express server
-  if (global.server) {
-    global.server.close();
-  }
-
-  // Spawn new process
-  const scriptPath = path.join(process.cwd(), 'app.js');
-  const child = spawn('node', [scriptPath], {
-    detached: true,
-    stdio: 'inherit'
-  });
-
-  child.unref();
-  process.exit();
-}
 
 // Utility function to check and handle server suspension
 async function suspendIfNeeded(userId, settings, db) {
-  const pterodactylId = await db.get("users-" + userId);
+  const user = await db.user.findUnique({
+    where: { id: userId },
+    select: { pterodactylId: true, packageName: true, extraRam: true, extraDisk: true, extraCpu: true, extraServers: true }
+  });
+
+  if (!user || !user.pterodactylId) return;
 
   try {
-    const userResponse = await pteroApi.get(`/api/application/users/${pterodactylId}?include=servers`);
+    const userResponse = await pteroApi.get(`/api/application/users/${user.pterodactylId}?include=servers`);
 
     const userData = userResponse.data;
     const servers = userData.attributes.relationships.servers.data;
@@ -1458,9 +1339,8 @@ async function suspendIfNeeded(userId, settings, db) {
     }), { ram: 0, disk: 0, cpu: 0 });
 
     // Get user's resource limits
-    const packageName = await db.get("package-" + userId);
-    const package = settings.api.client.packages.list[packageName || settings.api.client.packages.default];
-    const extra = await db.get("extra-" + userId) || { ram: 0, disk: 0, cpu: 0, servers: 0 };
+    const package = settings.api.client.packages.list[user.packageName || settings.api.client.packages.default];
+    const extra = { ram: user.extraRam, disk: user.extraDisk, cpu: user.extraCpu, servers: user.extraServers };
 
     // Check if over limits
     const isOverLimit =

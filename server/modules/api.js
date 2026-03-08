@@ -78,8 +78,11 @@ module.exports.load = async function (app, db) {
       const userData = req.session.userinfo;
 
       // Get 2FA status
-      const twoFactorData = await db.get(`2fa-${userId}`);
-      const twoFactorEnabled = twoFactorData?.enabled || false;
+      const user = await db.user.findUnique({
+        where: { id: userId },
+        select: { twoFactorEnabled: true }
+      });
+      const twoFactorEnabled = user?.twoFactorEnabled || false;
 
       // Return authentication state
       return res.json({
@@ -113,7 +116,11 @@ module.exports.load = async function (app, db) {
       });
     }
     const userId = req.session.userinfo.id;
-    const coins = await db.get(`coins-${userId}`) || 0;
+    const user = await db.user.findUnique({
+      where: { id: userId },
+      select: { coins: true }
+    });
+    const coins = user?.coins || 0;
     res.json({
       coins,
       index: 0
@@ -161,19 +168,24 @@ module.exports.load = async function (app, db) {
       const twoFactorPending = !!req.session.twoFactorPending;
 
       // Batch all DB reads in a single query
-      const dbKeys = [`2fa-${userId}`, `coins-${userId}`, `users-${userId}`];
-      if (req.session.pterodactyl) {
-        dbKeys.push(`subuser-servers-${req.session.pterodactyl.username}`);
-        dbKeys.push(`subuser-servers-discord-${userId}`);
-      }
-      const dbData = await db.getMany(dbKeys);
+      const [userRecord, subuserServersFromPtero, subuserServersFromUserId] = await Promise.all([
+        db.user.findUnique({
+          where: { id: userId },
+          select: { twoFactorEnabled: true, coins: true, pterodactylId: true }
+        }),
+        req.session.pterodactyl ? db.subuserServer.findMany({
+          where: { user: { pteroUsername: req.session.pterodactyl.username }, source: 'subuser' }
+        }) : Promise.resolve([]),
+        req.session.pterodactyl ? db.subuserServer.findMany({
+          where: { userId, source: 'subuser' }
+        }) : Promise.resolve([])
+      ]);
 
       // 2FA
-      const twoFactorData = dbData[`2fa-${userId}`];
-      const twoFactorEnabled = twoFactorData?.enabled || false;
+      const twoFactorEnabled = userRecord?.twoFactorEnabled || false;
 
       // Coins
-      const coins = dbData[`coins-${userId}`] || 0;
+      const coins = userRecord?.coins || 0;
 
       // Admin check (uses session cache like original)
       let isAdmin = false;
@@ -187,7 +199,7 @@ module.exports.load = async function (app, db) {
       }
       if (!isAdmin && req.session.pterodactyl) {
         try {
-          const pteroUserId = dbData[`users-${userId}`];
+          const pteroUserId = userRecord?.pterodactylId;
           if (pteroUserId) {
             const adminRes = await pteroApi.get(`/api/application/users/${pteroUserId}?include=servers`);
             isAdmin = adminRes.data.attributes.root_admin === true;
@@ -212,14 +224,14 @@ module.exports.load = async function (app, db) {
 
       // Subuser servers
       if (req.session.pterodactyl) {
-        const pteroSubs = dbData[`subuser-servers-${req.session.pterodactyl.username}`] || [];
-        const discordSubs = dbData[`subuser-servers-discord-${userId}`] || [];
-        const serverIds = new Set(pteroSubs.map(s => s.id));
+        const pteroSubs = subuserServersFromPtero || [];
+        const discordSubs = subuserServersFromUserId || [];
+        const serverIds = new Set(pteroSubs.map(s => s.serverId));
         subuserServers = [...pteroSubs];
         discordSubs.forEach(s => {
-          if (!serverIds.has(s.id)) {
+          if (!serverIds.has(s.serverId)) {
             subuserServers.push(s);
-            serverIds.add(s.id);
+            serverIds.add(s.serverId);
           }
         });
       }
@@ -251,4 +263,4 @@ module.exports.load = async function (app, db) {
       });
     }
   });
-}
+};

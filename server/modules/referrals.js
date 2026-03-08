@@ -22,7 +22,7 @@ const HeliactylModule = {
 module.exports.HeliactylModule = HeliactylModule;
 module.exports.load = async function (app, db) {
   app.get('/generate', async (req, res) => {
-    if (!req.session) return res.redirect("/login");
+    if (!req.session?.userinfo) return res.redirect("/login");
     if (!req.session.pterodactyl) return res.redirect("/login");
 
     if (!req.query.code) {
@@ -34,59 +34,114 @@ module.exports.load = async function (app, db) {
     if (referralCode.length > 15 || referralCode.includes(" ")) {
       return res.json({ error: "Invalid code" });
     }
+
     // check if the referral code already exists
-    if (await db.get(referralCode)) {
-      return res.json({ error: "Code already exists" });
-    }
-    // Save the referral code in the Keyv store along with the user's information
-    await db.set(referralCode, {
-      userId: req.session.userinfo.id,
-      createdAt: new Date()
+    const existing = await db.referral.findUnique({
+      where: { code: referralCode }
     });
 
-    // Render the referral code view
+    if (existing) {
+      return res.json({ error: "Code already exists" });
+    }
+
+    // Save the referral code
+    await db.referral.create({
+      data: {
+        code: referralCode,
+        userId: req.session.userinfo.id,
+        createdAt: new Date()
+      }
+    });
+
     res.json({ success: "Referral code created" });
   });
 
   app.get('/claim', async (req, res) => {
-    if (!req.session) return res.redirect("/login");
+    if (!req.session?.userinfo) return res.redirect("/login");
     if (!req.session.pterodactyl) return res.redirect("/login");
 
-    // Get the referral code from the request body
+    // Get the referral code from the query
     if (!req.query.code) {
       return res.json({ error: "No code provided" });
     }
 
     const referralCode = req.query.code;
 
-    // Retrieve the referral code from the Keyv store
-    const referral = await db.get(referralCode);
+    // Retrieve the referral code
+    const referral = await db.referral.findUnique({
+      where: { code: referralCode }
+    });
 
     if (!referral) {
       return res.json({ error: "Invalid code" });
     }
 
     // Check if user has already claimed a code
-    if (await db.get("referral-" + req.session.userinfo.id) == "1") {
+    const alreadyClaimed = await db.referral.findFirst({
+      where: { claimedById: req.session.userinfo.id }
+    });
+
+    if (alreadyClaimed) {
       return res.json({ error: "Already claimed a code" });
     }
 
     // Check if the referral code was created by the user
     if (referral.userId === req.session.userinfo.id) {
-      // Return an error if the referral code was created by the user
       return res.json({ error: "Cannot claim your own code" });
     }
 
-    // Award the referral bonus to the user who claimed the code
-    const ownercoins = await db.get("coins-" + referral.userId);
-    const usercoins = await db.get("coins-" + req.session.userinfo.id);
+    // Check if code was already claimed (unique constraint in schema but good to check)
+    if (referral.claimedById) {
+      return res.json({ error: "Code already claimed" });
+    }
 
-    db.set("coins-" + referral.userId, ownercoins + 80)
-    db.set("coins-" + req.session.userinfo.id, usercoins + 250)
-    db.set("referral-" + req.session.userinfo.id, 1)
+    try {
+      // Award the referral bonus atomically
+      await db.$transaction(async (tx) => {
+        // Award the owner
+        await tx.user.update({
+          where: { id: referral.userId },
+          data: { coins: { increment: 80 } }
+        });
 
-    // Render the referral claimed view
-    res.json({ success: "Referral code claimed" });
+        await tx.transaction.create({
+          data: {
+            userId: referral.userId,
+            type: 'earn',
+            amount: 80,
+            description: `Referral bonus from claimer ${req.session.userinfo.id}`
+          }
+        });
+
+        // Award the claimer
+        await tx.user.update({
+          where: { id: req.session.userinfo.id },
+          data: { coins: { increment: 250 } }
+        });
+
+        await tx.transaction.create({
+          data: {
+            userId: req.session.userinfo.id,
+            type: 'earn',
+            amount: 250,
+            description: `Claimed referral code: ${referralCode}`
+          }
+        });
+
+        // Mark code as claimed
+        await tx.referral.update({
+          where: { id: referral.id },
+          data: {
+            claimedById: req.session.userinfo.id,
+            claimedAt: new Date()
+          }
+        });
+      });
+
+      res.json({ success: "Referral code claimed" });
+    } catch (error) {
+      console.error("Referral claim error:", error);
+      res.json({ error: "Failed to claim referral code" });
+    }
   });
-
 };
