@@ -9,17 +9,8 @@ import { Switch } from '@/components/ui/switch';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table';
-import {
   Settings,
   RefreshCw,
-  Server,
   CheckCircle,
   AlertCircle,
   Save,
@@ -27,11 +18,7 @@ import {
   EyeOff,
   Globe,
   Clock,
-  Database,
-  Trash2,
-  Edit2,
-  X,
-  Check
+  Database
 } from 'lucide-react';
 import axios from 'axios';
 import { useToast } from '@/hooks/use-toast';
@@ -40,8 +27,6 @@ export default function AdminUpdater() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const [showSecret, setShowSecret] = useState(false);
-  const [editingServer, setEditingServer] = useState(null);
-  const [newName, setNewName] = useState('');
   const [formData, setFormData] = useState({
     enabled: true,
     checkInterval: 30,
@@ -78,17 +63,6 @@ export default function AdminUpdater() {
       return data;
     },
     refetchInterval: 30000, // Refresh every 30s
-    retry: 2
-  });
-
-  // Fetch servers
-  const { data: servers, isLoading: serversLoading, error: serversError } = useQuery({
-    queryKey: ['admin-updater-servers'],
-    queryFn: async () => {
-      const { data } = await axios.get('/api/admin/updater/servers');
-      return data;
-    },
-    refetchInterval: 30000,
     retry: 2
   });
 
@@ -136,51 +110,6 @@ export default function AdminUpdater() {
     }
   });
 
-  // Rename server mutation
-  const renameMutation = useMutation({
-    mutationFn: async ({ hostname, name }) => {
-      const { data } = await axios.patch(`/api/admin/updater/servers/${hostname}`, { name });
-      return data;
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries(['admin-updater-servers']);
-      setEditingServer(null);
-      toast({
-        title: 'Server renamed',
-        description: 'The server nickname has been updated.',
-      });
-    },
-    onError: (error) => {
-      toast({
-        title: 'Error',
-        description: error.response?.data?.error || 'Failed to rename server',
-        variant: 'destructive',
-      });
-    }
-  });
-
-  // Delete server mutation
-  const deleteMutation = useMutation({
-    mutationFn: async (hostname) => {
-      const { data } = await axios.delete(`/api/admin/updater/servers/${hostname}`);
-      return data;
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries(['admin-updater-servers']);
-      toast({
-        title: 'Server deleted',
-        description: 'The server entry has been removed.',
-      });
-    },
-    onError: (error) => {
-      toast({
-        title: 'Error',
-        description: error.response?.data?.error || 'Failed to delete server',
-        variant: 'destructive',
-      });
-    }
-  });
-
   const handleSave = () => {
     const dataToSave = {
       ...formData,
@@ -219,7 +148,7 @@ export default function AdminUpdater() {
   }
 
   return (
-    <div className="min-h-screen bg-neutral-950">
+    <div className="">
       <div className="p-6">
         {/* Header */}
         <div className="flex items-center justify-between mb-6">
@@ -241,10 +170,6 @@ export default function AdminUpdater() {
             <TabsTrigger value="status" className="data-[state=active]:bg-neutral-800">
               <RefreshCw className="w-4 h-4 mr-2" />
               Status
-            </TabsTrigger>
-            <TabsTrigger value="servers" className="data-[state=active]:bg-neutral-800">
-              <Server className="w-4 h-4 mr-2" />
-              Servers
             </TabsTrigger>
             <TabsTrigger value="settings" className="data-[state=active]:bg-neutral-800">
               <Settings className="w-4 h-4 mr-2" />
@@ -330,18 +255,6 @@ export default function AdminUpdater() {
                   </div>
 
                   <div className="flex items-center gap-4 p-3 rounded-lg hover:bg-neutral-900 transition-colors">
-                    <div className="p-2 rounded-full bg-blue-500/10 text-blue-500">
-                      <Server className="w-5 h-5" />
-                    </div>
-                    <div className="flex-1">
-                      <p className="font-medium text-white">Connected Servers</p>
-                      <p className="text-sm text-neutral-400">
-                        {servers?.length || 0} servers monitored
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-4 p-3 rounded-lg hover:bg-neutral-900 transition-colors">
                     <div className="p-2 rounded-full bg-purple-500/10 text-purple-500">
                       <Database className="w-5 h-5" />
                     </div>
@@ -355,140 +268,6 @@ export default function AdminUpdater() {
                 </CardContent>
               </Card>
             </div>
-          </TabsContent>
-
-          {/* Servers Tab */}
-          <TabsContent value="servers">
-            <Card>
-              <CardHeader>
-                <CardTitle>Server Status</CardTitle>
-                <CardDescription>Update status for all connected nodes</CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="overflow-x-auto"><Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Server Name</TableHead>
-                      <TableHead>Current Version</TableHead>
-                      <TableHead>Last Check</TableHead>
-                      <TableHead>Status</TableHead>
-                      <TableHead className="w-16">Actions</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                    <TableBody>
-                      {serversLoading ? (
-                        <TableRow>
-                          <TableCell colSpan={5} className="text-center py-8 text-neutral-500">
-                            Loading server status...
-                          </TableCell>
-                        </TableRow>
-                      ) : servers?.length === 0 ? (
-                        <TableRow>
-                          <TableCell colSpan={5} className="text-center py-8 text-neutral-500">
-                            No servers found
-                          </TableCell>
-                        </TableRow>
-                      ) : (
-                        servers?.map((server, index) => (
-                          <TableRow key={index}>
-                            <TableCell className="font-medium text-white">
-                              {editingServer === server.hostname ? (
-                                <div className="flex items-center gap-2">
-                                  <Input 
-                                    value={newName} 
-                                    onChange={(e) => setNewName(e.target.value)}
-                                    className="h-8 w-40 bg-neutral-900 border-neutral-800"
-                                    autoFocus
-                                  />
-                                  <Button 
-                                    size="icon" 
-                                    variant="ghost" 
-                                    className="h-8 w-8 text-green-500 hover:text-green-400"
-                                    onClick={() => renameMutation.mutate({ hostname: server.hostname, name: newName })}
-                                    disabled={renameMutation.isPending}
-                                  >
-                                    <Check className="h-4 w-4" />
-                                  </Button>
-                                  <Button 
-                                    size="icon" 
-                                    variant="ghost" 
-                                    className="h-8 w-8 text-red-500 hover:text-red-400"
-                                    onClick={() => setEditingServer(null)}
-                                  >
-                                    <X className="h-4 w-4" />
-                                  </Button>
-                                </div>
-                              ) : (
-                                <div className="flex items-center gap-2 group">
-                                  <div>
-                                    <p className="font-medium">{server.name || server.hostname}</p>
-                                    {server.name && server.name !== server.hostname && (
-                                      <p className="text-xs text-neutral-500">{server.hostname}</p>
-                                    )}
-                                  </div>
-                                  <Button 
-                                    size="icon" 
-                                    variant="ghost" 
-                                    className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity"
-                                    onClick={() => {
-                                      setEditingServer(server.hostname);
-                                      setNewName(server.name || server.hostname);
-                                    }}
-                                  >
-                                    <Edit2 className="h-3 w-3" />
-                                  </Button>
-                                </div>
-                              )}
-                            </TableCell>
-                            <TableCell>
-                              <Badge variant="secondary" className="bg-neutral-800">
-                                {server.version}
-                              </Badge>
-                            </TableCell>
-                            <TableCell className="text-neutral-400">
-                              {server.updatedAt ? new Date(server.updatedAt).toLocaleString() : 'Never'}
-                            </TableCell>
-                            <TableCell>
-                              {server.updating ? (
-                                <Badge className="bg-yellow-500/10 text-yellow-500 hover:bg-yellow-500/20 border-yellow-500/20">
-                                  Updating
-                                </Badge>
-                              ) : server.error ? (
-                                <Badge className="bg-red-500/10 text-red-500 hover:bg-red-500/20 border-red-500/20">
-                                  Error
-                                </Badge>
-                              ) : server.online === false ? (
-                                <Badge className="bg-red-500/10 text-red-500 hover:bg-red-500/20 border-red-500/20">
-                                  Offline
-                                </Badge>
-                              ) : (
-                                <Badge className="bg-green-500/10 text-green-500 hover:bg-green-500/20 border-green-500/20">
-                                  Online
-                                </Badge>
-                              )}
-                            </TableCell>
-                            <TableCell>
-                              <Button 
-                                size="icon" 
-                                variant="ghost" 
-                                className="h-8 w-8 text-neutral-500 hover:text-red-500 hover:bg-red-500/10"
-                                onClick={() => {
-                                  if (confirm(`Are you sure you want to delete server "${server.hostname}"?`)) {
-                                    deleteMutation.mutate(server.hostname);
-                                  }
-                                }}
-                                disabled={deleteMutation.isPending}
-                              >
-                                <Trash2 className="h-4 w-4" />
-                              </Button>
-                            </TableCell>
-                          </TableRow>
-                        ))
-                      )}
-                    </TableBody>
-                </Table></div>
-              </CardContent>
-            </Card>
           </TabsContent>
 
           {/* Settings Tab */}
