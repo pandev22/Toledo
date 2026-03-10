@@ -68,10 +68,11 @@ import {
   UserCog,
   Shield,
   Info,
-  Check,
   X
 } from 'lucide-react';
 import axios from 'axios';
+import { useToast } from "@/hooks/use-toast";
+
 
 // Resource Info Component
 function ResourceInfo({ label, icon: Icon, used, total, unit }) {
@@ -283,7 +284,9 @@ function UserForm({ user, onSubmit, isSubmitting }) {
 
 // Main Component
 export default function UsersPage() {
+  const { toast } = useToast();
   const queryClient = useQueryClient();
+
   const [search, setSearch] = useState('');
   const [perPage, setPerPage] = useState('10');
   const [currentPage, setCurrentPage] = useState(1);
@@ -291,7 +294,6 @@ export default function UsersPage() {
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const [selectedUser, setSelectedUser] = useState(null);
-  const [error, setError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Fetch basic user list only (no coins/resources - those are fetched per-page)
@@ -400,7 +402,6 @@ export default function UsersPage() {
 
     try {
       setIsSubmitting(true);
-      setError('');
 
       const { data: userData } = await axios.post('/api/users', {
         email: formData.email,
@@ -431,9 +432,18 @@ export default function UsersPage() {
       queryClient.invalidateQueries('users');
 
       // Show success message
-      setError('success:User created successfully');
+      toast({
+        title: "Success",
+        description: "User created successfully",
+      });
+
     } catch (err) {
-      setError(err.response?.data?.error || 'Failed to create user');
+      toast({
+        title: "Error",
+        description: err.response?.data?.error || 'Failed to create user',
+        variant: "destructive",
+      });
+
     } finally {
       setIsSubmitting(false);
     }
@@ -448,7 +458,6 @@ export default function UsersPage() {
 
     try {
       setIsSubmitting(true);
-      setError('');
 
       const updateData = {
         email: formData.email,
@@ -483,9 +492,18 @@ export default function UsersPage() {
       queryClient.invalidateQueries('users');
 
       // Show success message
-      setError('success:User updated successfully');
+      toast({
+        title: "Success",
+        description: "User updated successfully",
+      });
+
     } catch (err) {
-      setError(err.response?.data?.error || 'Failed to update user');
+      toast({
+        title: "Error",
+        description: err.response?.data?.error || 'Failed to update user',
+        variant: "destructive",
+      });
+
     } finally {
       setIsSubmitting(false);
     }
@@ -497,9 +515,18 @@ export default function UsersPage() {
       setIsDeleteDialogOpen(false);
       setSelectedUser(null);
       queryClient.invalidateQueries('users');
-      setError('success:User deleted successfully');
+      toast({
+        title: "Success",
+        description: "User deleted successfully",
+      });
+
     } catch (err) {
-      setError(err.response?.data?.error || 'Failed to delete user');
+      toast({
+        title: "Error",
+        description: err.response?.data?.error || 'Failed to delete user',
+        variant: "destructive",
+      });
+
     }
   };
 
@@ -517,22 +544,6 @@ export default function UsersPage() {
         </Button>
       </div>
 
-      {/* Error/Success Alert */}
-      {error && (
-        <Alert
-          variant={error.startsWith('success:') ? 'default' : 'destructive'}
-          className="mb-6"
-        >
-          {error.startsWith('success:') ? (
-            <Check className="h-4 w-4" />
-          ) : (
-            <AlertCircle className="h-4 w-4" />
-          )}
-          <AlertDescription>
-            {error.replace('success:', '')}
-          </AlertDescription>
-        </Alert>
-      )}
 
       {/* Main Content */}
       <Card>

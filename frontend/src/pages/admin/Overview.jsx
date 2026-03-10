@@ -5,15 +5,16 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Alert, AlertDescription } from '@/components/ui/alert';
+import { useToast } from '@/hooks/use-toast';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
 import {
   Dialog,
   DialogContent,
-  DialogDescription,
   DialogHeader,
   DialogTitle,
+  DialogDescription,
   DialogFooter,
 } from "@/components/ui/dialog";
 import {
@@ -177,8 +178,8 @@ function BackupsDialog({ isOpen, onClose }) {
   const [backupToDelete, setBackupToDelete] = useState(null);
   const [isRestoring, setIsRestoring] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
-  const [error, setError] = useState('');
   const [showRebootPrompt, setShowRebootPrompt] = useState(false);
+  const { toast } = useToast();
 
   const { data: backups, isLoading, refetch } = useQuery({
     queryKey: ['backups'],
@@ -192,12 +193,12 @@ function BackupsDialog({ isOpen, onClose }) {
   const handleRestore = async () => {
     try {
       setIsRestoring(true);
-      setError('');
       await axios.post(`/api/config/backups/${selectedBackup.name}/restore`);
+      toast({ title: "Success", description: "Configuration restored successfully." });
       setShowRebootPrompt(true);
       refetch();
     } catch (err) {
-      setError(err.response?.data?.error || 'Failed to restore backup');
+      toast({ variant: "destructive", title: "Error", description: err.response?.data?.error || 'Failed to restore backup' });
     } finally {
       setIsRestoring(false);
     }
@@ -206,12 +207,12 @@ function BackupsDialog({ isOpen, onClose }) {
   const handleDelete = async () => {
     try {
       setIsDeleting(true);
-      setError('');
       await axios.delete(`/api/config/backups/${backupToDelete.name}`);
+      toast({ title: "Success", description: "Backup deleted successfully." });
       setBackupToDelete(null);
       refetch();
     } catch (err) {
-      setError(err.response?.data?.error || 'Failed to delete backup');
+      toast({ variant: "destructive", title: "Error", description: err.response?.data?.error || 'Failed to delete backup' });
     } finally {
       setIsDeleting(false);
     }
@@ -223,7 +224,7 @@ function BackupsDialog({ isOpen, onClose }) {
       onClose();
       setTimeout(() => window.location.reload(), 7000);
     } catch (err) {
-      setError('Failed to reboot dashboard');
+      toast({ variant: "destructive", title: "Error", description: 'Failed to reboot dashboard' });
     }
   };
 
@@ -264,13 +265,6 @@ function BackupsDialog({ isOpen, onClose }) {
         </DialogHeader>
 
         <div className="space-y-4">
-          {error && (
-            <Alert variant="destructive">
-              <AlertCircle className="h-4 w-4" />
-              <AlertDescription>{error}</AlertDescription>
-            </Alert>
-          )}
-
           <ScrollArea className="h-[400px] rounded-md border border-neutral-800">
             <div className="overflow-x-auto"><Table>
               <TableHeader>
@@ -413,9 +407,9 @@ export default function AdminOverview() {
   const [configContent, setConfigContent] = useState('');
   const [isRebootDialogOpen, setIsRebootDialogOpen] = useState(false);
   const [isBackupsDialogOpen, setIsBackupsDialogOpen] = useState(false);
-  const [error, setError] = useState('');
   const [isSaving, setIsSaving] = useState(false);
   const [isRebooting, setIsRebooting] = useState(false);
+  const { toast } = useToast();
 
   const { data: config, isLoading: loadingConfig } = useQuery({
     queryKey: ['config'],
@@ -440,7 +434,7 @@ export default function AdminOverview() {
         const { data } = await axios.get('/api/config/raw');
         setConfigContent(data);
       } catch (err) {
-        setError('Failed to load configuration file');
+        toast({ variant: "destructive", title: "Error", description: 'Failed to load configuration file' });
       }
     };
     fetchConfigContent();
@@ -449,7 +443,6 @@ export default function AdminOverview() {
   const handleSaveConfig = async () => {
     try {
       setIsSaving(true);
-      setError('');
 
       // Create backup before saving
       const timestamp = Date.now();
@@ -458,9 +451,9 @@ export default function AdminOverview() {
         headers: { 'Content-Type': 'text/plain' }
       });
 
-      setError('Configuration saved successfully. A reboot is required to apply changes.');
+      toast({ title: "Success", description: "Configuration saved successfully. A reboot is required to apply changes." });
     } catch (err) {
-      setError(err.response?.data?.error || 'Failed to save configuration');
+      toast({ variant: "destructive", title: "Error", description: err.response?.data?.error || 'Failed to save configuration' });
     } finally {
       setIsSaving(false);
     }
@@ -473,18 +466,17 @@ export default function AdminOverview() {
       await axios.post('/api/reboot');
       setTimeout(() => window.location.reload(), 7000);
     } catch (err) {
-      setError('Failed to initiate reboot');
+      toast({ variant: "destructive", title: "Error", description: 'Failed to initiate reboot' });
       setIsRebooting(false);
     }
   };
 
   const handleCreateBackup = async () => {
     try {
-      setError('');
       await handleSaveConfig();
       setIsBackupsDialogOpen(true);
     } catch (err) {
-      setError('Failed to create backup');
+      toast({ variant: "destructive", title: "Error", description: 'Failed to create backup' });
     }
   };
 
@@ -642,9 +634,9 @@ export default function AdminOverview() {
                     onClick={async () => {
                       try {
                         await axios.post('/api/panel/rebuild');
-                        setError('Panel rebuild initiated successfully');
+                        toast({ title: "Success", description: "Panel rebuild initiated successfully" });
                       } catch (err) {
-                        setError('Failed to rebuild panel');
+                        toast({ variant: "destructive", title: "Error", description: "Failed to rebuild panel" });
                       }
                     }}
                   >
@@ -654,17 +646,6 @@ export default function AdminOverview() {
                 </div>
               </CardContent>
             </Card>
-
-            {error && (
-              <Alert variant={error.includes('successfully') ? "default" : "destructive"}>
-                {error.includes('successfully') ? (
-                  <Check className="h-4 w-4" />
-                ) : (
-                  <AlertCircle className="h-4 w-4" />
-                )}
-                <AlertDescription>{error}</AlertDescription>
-              </Alert>
-            )}
           </div>
         </div>
       </div>

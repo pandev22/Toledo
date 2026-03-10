@@ -64,9 +64,11 @@ import {
   Alert,
   AlertDescription,
 } from "@/components/ui/alert";
+import { useToast } from "@/hooks/use-toast";
 
 const PluginsPage = () => {
   const { id } = useParams();
+  const { toast } = useToast();
   const [activeTab, setActiveTab] = useState('browse');
   const [platforms, setPlatforms] = useState([]);
   const [selectedPlatform, setSelectedPlatform] = useState('spigot');
@@ -117,12 +119,18 @@ const PluginsPage = () => {
       const response = await axios.get(`/api/plugins/scan/${id}`);
       if (response.data.success) {
         setInstalledPlugins(Array.isArray(response.data.plugins) ? response.data.plugins : []);
-        // Show success message
-        // You can add a toast notification system here if you want
+        toast({
+          title: "Scan Successful",
+          description: "Installed plugins list has been updated."
+        });
       }
     } catch (err) {
       console.error('Failed to scan for plugins:', err);
-      // Show error message
+      toast({
+        title: "Scan Failed",
+        description: "Could not scan for installed plugins.",
+        variant: "destructive"
+      });
     } finally {
       setLoading(false);
     }
@@ -282,12 +290,21 @@ const PluginsPage = () => {
       // Update installed plugins list
       fetchInstalledPlugins();
       setModalView('success');
+      toast({
+        title: "Installation Successful",
+        description: response.data.message || `${response.data.pluginName} has been installed.`
+      });
     } catch (err) {
       setInstallStatus({
         success: false,
         message: err.response?.data?.error || 'Failed to install plugin.'
       });
       setModalView('error');
+      toast({
+        title: "Installation Failed",
+        description: err.response?.data?.error || 'Failed to install plugin.',
+        variant: "destructive"
+      });
       console.error(err);
     } finally {
       setIsInstalling(false);

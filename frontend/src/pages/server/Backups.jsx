@@ -7,20 +7,17 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Trash2, Plus, RefreshCw, Download } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
-import { Alert, AlertDescription } from "@/components/ui/alert";
+import { ConfirmDialog } from '@/components/ConfirmDialog';
+import { useToast } from '@/hooks/use-toast';
 
 const BackupsPage = () => {
   const { id } = useParams();
+  const { toast } = useToast();
   const [backups, setBackups] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-  const [createError, setCreateError] = useState(null);
-  const [deleteError, setDeleteError] = useState(null);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
-  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
-  const [selectedBackup, setSelectedBackup] = useState(null);
   const [createLoading, setCreateLoading] = useState(false);
-  const [deleteLoading, setDeleteLoading] = useState(false);
 
   const fetchBackups = async () => {
     setLoading(false); // Don't show loading spinner during auto-refresh
@@ -35,32 +32,42 @@ const BackupsPage = () => {
   };
 
   const handleCreateBackup = async () => {
-    setCreateError(null);
     setCreateLoading(true);
     try {
       const response = await axios.post(`/api/server/${id}/backups`);
       setBackups([...backups, response.data]);
       setIsCreateModalOpen(false);
+      toast({
+        title: "Success",
+        description: "Backup creation has been started.",
+      });
     } catch (err) {
-      setCreateError('Failed to create backup. Please try again later.');
+      toast({
+        title: "Error",
+        description: "Failed to create backup. Please try again later.",
+        variant: "destructive",
+      });
       console.error(err);
     } finally {
       setCreateLoading(false);
     }
   };
 
-  const handleDeleteBackup = async () => {
-    setDeleteError(null);
-    setDeleteLoading(true);
+  const handleDeleteBackup = async (backup) => {
     try {
-      await axios.delete(`/api/server/${id}/backups/${selectedBackup.attributes.uuid}`);
-      setBackups(backups.filter(backup => backup.attributes.uuid !== selectedBackup.attributes.uuid));
-      setIsDeleteModalOpen(false);
+      await axios.delete(`/api/server/${id}/backups/${backup.attributes.uuid}`);
+      setBackups(backups.filter(b => b.attributes.uuid !== backup.attributes.uuid));
+      toast({
+        title: "Success",
+        description: "Backup deleted successfully.",
+      });
     } catch (err) {
-      setDeleteError('Failed to delete backup. Please try again later.');
+      toast({
+        title: "Error",
+        description: "Failed to delete backup. Please try again later.",
+        variant: "destructive",
+      });
       console.error(err);
-    } finally {
-      setDeleteLoading(false);
     }
   };
 
@@ -99,15 +106,7 @@ const BackupsPage = () => {
   }, [id]);
 
   useEffect(() => {
-    if (!isDeleteModalOpen) {
-      setDeleteError(null);
-      setDeleteLoading(false);
-    }
-  }, [isDeleteModalOpen]);
-
-  useEffect(() => {
     if (!isCreateModalOpen) {
-      setCreateError(null);
       setCreateLoading(false);
     }
   }, [isCreateModalOpen]);
@@ -136,57 +135,64 @@ const BackupsPage = () => {
               {error}
             </div>
           ) : (
-<ScrollArea className="h-[600px]">
-              <div className="overflow-x-auto"><Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Name</TableHead>
-                    <TableHead>Size</TableHead>
-                    <TableHead>Created</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {backups.map((backup) => (
-                    <TableRow key={backup.attributes.uuid}>
-                      <TableCell>{backup.attributes.name || 'Backup'}</TableCell>
-                      <TableCell>{formatBytes(backup.attributes.bytes)}</TableCell>
-                      <TableCell>{formatDate(backup.attributes.created_at)}</TableCell>
-                      <TableCell>
-                        <div className="flex items-center">
-                          {getBackupStatus(backup) === 'Creating' && (
-                            <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
-                          )}
-                          {getBackupStatus(backup)}
-                        </div>
-                      </TableCell>
-                      <TableCell className="space-x-2">
-                        <Button
-                          size="sm"
-                          variant="secondary"
-                          onClick={() => handleDownloadBackup(backup)}
-                          disabled={!backup.attributes.is_successful}
-                        >
-                          <Download className="w-4 h-4 mr-2" />
-                          Download
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="destructive"
-                          onClick={() => {
-                            setSelectedBackup(backup);
-                            setIsDeleteModalOpen(true);
-                          }}
-                        >
-                          <Trash2 className="w-4 h-4 mr-2" />
-                          Delete
-                        </Button>
-                      </TableCell>
+            <ScrollArea className="h-[600px]">
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Name</TableHead>
+                      <TableHead>Size</TableHead>
+                      <TableHead>Created</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead>Actions</TableHead>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table></div>
+                  </TableHeader>
+                  <TableBody>
+                    {backups.map((backup) => (
+                      <TableRow key={backup.attributes.uuid}>
+                        <TableCell>{backup.attributes.name || 'Backup'}</TableCell>
+                        <TableCell>{formatBytes(backup.attributes.bytes)}</TableCell>
+                        <TableCell>{formatDate(backup.attributes.created_at)}</TableCell>
+                        <TableCell>
+                          <div className="flex items-center">
+                            {getBackupStatus(backup) === 'Creating' && (
+                              <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
+                            )}
+                            {getBackupStatus(backup)}
+                          </div>
+                        </TableCell>
+                        <TableCell className="space-x-2">
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            onClick={() => handleDownloadBackup(backup)}
+                            disabled={!backup.attributes.is_successful}
+                          >
+                            <Download className="w-4 h-4 mr-2" />
+                            Download
+                          </Button>
+                          <ConfirmDialog
+                            title="Delete Backup"
+                            description="Are you sure you want to delete this backup? This action cannot be undone."
+                            confirmText="Delete"
+                            variant="destructive"
+                            onConfirm={() => handleDeleteBackup(backup)}
+                            trigger={
+                              <Button
+                                size="sm"
+                                variant="destructive"
+                              >
+                                <Trash2 className="w-4 h-4 mr-2" />
+                                Delete
+                              </Button>
+                            }
+                          />
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
             </ScrollArea>
           )}
         </CardContent>
@@ -200,11 +206,6 @@ const BackupsPage = () => {
               Create a new backup of your server. This may take some time depending on the size of your server.
             </DialogDescription>
           </DialogHeader>
-          {createError && (
-            <Alert variant="destructive" className="mt-2">
-              <AlertDescription>{createError}</AlertDescription>
-            </Alert>
-          )}
           <DialogFooter>
             <Button variant="secondary" onClick={() => setIsCreateModalOpen(false)} className="text-white hover:text-white">
               Cancel
@@ -216,39 +217,6 @@ const BackupsPage = () => {
                 <Plus className="w-4 h-4 mr-2" />
               )}
               Create Backup
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={isDeleteModalOpen} onOpenChange={setIsDeleteModalOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Delete Backup</DialogTitle>
-            <DialogDescription>
-              Are you sure you want to delete this backup? This action cannot be undone.
-            </DialogDescription>
-          </DialogHeader>
-          {deleteError && (
-            <Alert variant="destructive" className="mt-2">
-              <AlertDescription>{deleteError}</AlertDescription>
-            </Alert>
-          )}
-          <DialogFooter>
-            <Button variant="secondary" onClick={() => setIsDeleteModalOpen(false)} className="text-white hover:text-white">
-              Cancel
-            </Button>
-            <Button
-              variant="destructive"
-              onClick={handleDeleteBackup}
-              disabled={deleteLoading}
-            >
-              {deleteLoading ? (
-                <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
-              ) : (
-                <Trash2 className="w-4 h-4 mr-2" />
-              )}
-              Delete
             </Button>
           </DialogFooter>
         </DialogContent>

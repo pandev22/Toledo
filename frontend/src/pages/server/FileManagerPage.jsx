@@ -87,6 +87,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 
 // Utility functions
 const formatBytes = (bytes) => {
@@ -905,19 +906,23 @@ const FileManagerPage = () => {
                     <Archive className="h-4 w-4 mr-2" />
                     Archive
                   </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="text-destructive hover:text-destructive hover:bg-destructive/10"
-                    onClick={() => {
-                      if (window.confirm(`Are you sure you want to delete ${selectedFiles.length} file(s)?`)) {
-                        handleFileDelete(selectedFiles);
-                      }
-                    }}
-                  >
-                    <Trash2 className="h-4 w-4 mr-2" />
-                    Delete
-                  </Button>
+                  <ConfirmDialog
+                    title="Delete Files"
+                    description={`Are you sure you want to delete ${selectedFiles.length} file(s)? This action cannot be undone.`}
+                    confirmText="Delete"
+                    variant="destructive"
+                    onConfirm={() => handleFileDelete(selectedFiles)}
+                    trigger={
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="text-destructive hover:text-destructive hover:bg-destructive/10"
+                      >
+                        <Trash2 className="h-4 w-4 mr-2" />
+                        Delete
+                      </Button>
+                    }
+                  />
                   <Button
                     variant="ghost"
                     size="icon"

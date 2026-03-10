@@ -19,6 +19,8 @@ import {
   Bell
 } from 'lucide-react';
 import axios from 'axios';
+import { useToast } from '@/hooks/use-toast';
+import { ConfirmDialog } from '@/components/ConfirmDialog';
 
 const PriorityBadge = ({ priority }) => {
   const variants = {
@@ -46,6 +48,7 @@ const StatusBadge = ({ status }) => (
 
 const CreateTicketDialog = ({ isOpen, onClose }) => {
   const queryClient = useQueryClient();
+  const { toast } = useToast();
   const [formData, setFormData] = useState({
     subject: '',
     category: 'technical',
@@ -65,9 +68,19 @@ const CreateTicketDialog = ({ isOpen, onClose }) => {
       setFormData({ subject: '', category: 'technical', priority: 'medium', description: '' });
       setError('');
       onClose();
+      toast({
+        title: "Success",
+        description: "Your support ticket has been created.",
+      });
     },
     onError: (err) => {
-      setError(err.response?.data?.error || 'Failed to create ticket');
+      const message = err.response?.data?.error || 'Failed to create ticket';
+      setError(message);
+      toast({
+        title: "Error",
+        description: message,
+        variant: "destructive",
+      });
     }
   });
 
@@ -84,7 +97,7 @@ const CreateTicketDialog = ({ isOpen, onClose }) => {
     <Dialog open={isOpen} onOpenChange={onClose}>
       <DialogContent className="sm:max-w-xl bg-[#1a1d21] border-[#2e3337]/50 text-white">
         <DialogHeader>
-	          <DialogTitle className="text-xl font-semibold">Create New Support Ticket</DialogTitle>
+          <DialogTitle className="text-xl font-semibold">Create New Support Ticket</DialogTitle>
         </DialogHeader>
         
         {error && (
@@ -185,6 +198,7 @@ const CreateTicketDialog = ({ isOpen, onClose }) => {
 
 const ViewTicketDialog = ({ isOpen, onClose, ticketId }) => {
   const queryClient = useQueryClient();
+  const { toast } = useToast();
   const [replyContent, setReplyContent] = useState('');
   const [lastMessageCount, setLastMessageCount] = useState(0);
   const [hasNewMessages, setHasNewMessages] = useState(false);
@@ -231,6 +245,17 @@ const ViewTicketDialog = ({ isOpen, onClose, ticketId }) => {
       queryClient.invalidateQueries(['ticket', ticketId]);
       queryClient.invalidateQueries(['user-tickets']);
       setReplyContent('');
+      toast({
+        title: "Success",
+        description: "Your reply has been sent.",
+      });
+    },
+    onError: (err) => {
+      toast({
+        title: "Error",
+        description: err.response?.data?.error || "Failed to send reply.",
+        variant: "destructive",
+      });
     }
   });
 
@@ -243,6 +268,17 @@ const ViewTicketDialog = ({ isOpen, onClose, ticketId }) => {
       queryClient.invalidateQueries(['ticket', ticketId]);
       queryClient.invalidateQueries(['user-tickets']);
       queryClient.invalidateQueries(['ticket-counts']);
+      toast({
+        title: "Success",
+        description: "Ticket has been closed.",
+      });
+    },
+    onError: (err) => {
+      toast({
+        title: "Error",
+        description: err.response?.data?.error || "Failed to close ticket.",
+        variant: "destructive",
+      });
     }
   });
 
@@ -343,15 +379,24 @@ const ViewTicketDialog = ({ isOpen, onClose, ticketId }) => {
             </div>
 
             <DialogFooter className="gap-2">
-              <Button
-                variant="outline"
-                onClick={() => closeMutation.mutate()}
-                disabled={closeMutation.isPending}
-                className="border-red-500/30 text-red-400 hover:bg-red-500/20 hover:text-red-300 hover:border-red-500/50 transition-colors"
-              >
-                <X className="w-4 h-4 mr-2" />
-                Close Ticket
-              </Button>
+              <ConfirmDialog
+                title="Close Ticket"
+                description="Are you sure you want to close this ticket? You will not be able to send further replies."
+                confirmText="Close Ticket"
+                variant="destructive"
+                onConfirm={() => closeMutation.mutate()}
+                trigger={
+                  <Button
+                    variant="outline"
+                    type="button"
+                    disabled={closeMutation.isPending}
+                    className="border-red-500/30 text-red-400 hover:bg-red-500/20 hover:text-red-300 hover:border-red-500/50 transition-colors"
+                  >
+                    <X className="w-4 h-4 mr-2" />
+                    Close Ticket
+                  </Button>
+                }
+              />
               <Button 
                 type="submit" 
                 disabled={replyMutation.isPending || !replyContent.trim()}

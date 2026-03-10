@@ -6,20 +6,16 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Trash2, Plus, RefreshCw, Star } from 'lucide-react';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
-import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
+import { useToast } from "@/hooks/use-toast";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 
 const AllocationsPage = () => {
   const { id } = useParams();
+  const { toast } = useToast();
   const [allocations, setAllocations] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-  const [deleteError, setDeleteError] = useState(null);
-  const [createError, setCreateError] = useState(null);
-  const [isAddModalOpen, setIsAddModalOpen] = useState(false);
-  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
-  const [selectedAllocation, setSelectedAllocation] = useState(null);
   const [createLoading, setCreateLoading] = useState(false);
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [primaryLoading, setPrimaryLoading] = useState(false);
@@ -39,37 +35,41 @@ const AllocationsPage = () => {
   };
 
   const handleAddAllocation = async () => {
-    setCreateError(null);
     setCreateLoading(true);
     try {
       const response = await axios.post(`/api/server/${id}/allocations`, {});
       setAllocations([...allocations, response.data]);
-      setIsAddModalOpen(false);
+      toast({ title: "Success", description: "Allocation created successfully." });
     } catch (err) {
       const errorDetail = err.response?.data?.details?.errors?.[0]?.detail;
-      setCreateError(errorDetail || 'Failed to create allocation. Please try again later.');
+      toast({ 
+        variant: "destructive", 
+        title: "Error", 
+        description: errorDetail || 'Failed to create allocation. Please try again later.' 
+      });
       console.error(err);
     } finally {
       setCreateLoading(false);
     }
   };
-
-  const handleDeleteAllocation = async () => {
-    setDeleteError(null);
+  const handleDeleteAllocation = async (allocation) => {
     setDeleteLoading(true);
     try {
-      await axios.delete(`/api/server/${id}/allocations/${selectedAllocation.id}`);
-      setAllocations(allocations.filter(allocation => allocation.id !== selectedAllocation.id));
-      setIsDeleteModalOpen(false);
+      await axios.delete(`/api/server/${id}/allocations/${allocation.id}`);
+      setAllocations(allocations.filter(a => a.id !== allocation.id));
+      toast({ title: "Success", description: "Allocation deleted successfully." });
     } catch (err) {
       const errorDetail = err.response?.data?.details?.errors?.[0]?.detail;
-      setDeleteError(errorDetail || 'Failed to delete allocation. Please try again later.');
+      toast({ 
+        variant: "destructive", 
+        title: "Error", 
+        description: errorDetail || 'Failed to delete allocation. Please try again later.' 
+      });
       console.error(err);
     } finally {
       setDeleteLoading(false);
     }
   };
-
   const handleSetPrimary = async (allocation) => {
     setPrimaryLoading(true);
     try {
@@ -78,7 +78,13 @@ const AllocationsPage = () => {
         ...a,
         is_primary: a.id === allocation.id
       })));
+      toast({ title: "Success", description: "Primary allocation updated." });
     } catch (err) {
+      toast({ 
+        variant: "destructive", 
+        title: "Error", 
+        description: "Failed to set primary allocation." 
+      });
       console.error(err);
     } finally {
       setPrimaryLoading(false);
@@ -89,19 +95,7 @@ const AllocationsPage = () => {
     fetchAllocations();
   }, [id]);
 
-  useEffect(() => {
-    if (!isDeleteModalOpen) {
-      setDeleteError(null);
-      setDeleteLoading(false);
-    }
-  }, [isDeleteModalOpen]);
 
-  useEffect(() => {
-    if (!isAddModalOpen) {
-      setCreateError(null);
-      setCreateLoading(false);
-    }
-  }, [isAddModalOpen]);
 
   return (
     <div className="space-y-6 p-6">
@@ -110,11 +104,19 @@ const AllocationsPage = () => {
           <h1 className="text-2xl font-bold text-white">Network</h1>
           <p className="text-sm text-neutral-400 mt-1">Manage IP and port allocations for this server.</p>
         </div>
-        <Button onClick={() => setIsAddModalOpen(true)} className="bg-white text-black hover:bg-neutral-200">
-          New allocation
-        </Button>
+        <ConfirmDialog
+          trigger={
+            <Button className="bg-white text-black hover:bg-neutral-200" disabled={createLoading}>
+              {createLoading ? <RefreshCw className="w-4 h-4 mr-2 animate-spin" /> : null}
+              New allocation
+            </Button>
+          }
+          title="Add Allocation"
+          description="A new allocation with a random port will be added to the server."
+          confirmText="Add Allocation"
+          onConfirm={handleAddAllocation}
+        />
       </div>
-
       <Card className="bg-transparent border-none shadow-none">
         <CardContent className="p-0">
           {loading ? (
@@ -165,17 +167,22 @@ const AllocationsPage = () => {
                                 Set primary
                               </button>
                             )}
-                            <button
-                              onClick={() => {
-                                setSelectedAllocation(allocation);
-                                setIsDeleteModalOpen(true);
-                              }}
-                              disabled={allocation.is_primary}
-                              className="text-sm text-red-400/80 hover:text-red-400 transition-colors disabled:opacity-50 flex items-center"
-                            >
-                              <Trash2 className="w-4 h-4 mr-2" />
-                              Delete
-                            </button>
+                            <ConfirmDialog
+                              trigger={
+                                <button
+                                  disabled={allocation.is_primary || deleteLoading}
+                                  className="text-sm text-red-400/80 hover:text-red-400 transition-colors disabled:opacity-50 flex items-center"
+                                >
+                                  {deleteLoading ? <RefreshCw className="w-4 h-4 mr-2 animate-spin" /> : <Trash2 className="w-4 h-4 mr-2" />}
+                                  Delete
+                                </button>
+                              }
+                              title="Delete Allocation"
+                              description="Are you sure you want to delete this allocation?"
+                              confirmText="Delete"
+                              variant="destructive"
+                              onConfirm={() => handleDeleteAllocation(allocation)}
+                            />
                           </div>
                         </TableCell>
                       </TableRow>
@@ -187,68 +194,6 @@ const AllocationsPage = () => {
           )}
         </CardContent>
       </Card>
-
-      <Dialog open={isAddModalOpen} onOpenChange={setIsAddModalOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Add Allocation</DialogTitle>
-            <DialogDescription>
-              A new allocation with a random port will be added to the server.
-            </DialogDescription>
-          </DialogHeader>
-          {createError && (
-            <Alert variant="destructive" className="mt-2">
-              <AlertDescription>{createError}</AlertDescription>
-            </Alert>
-          )}
-          <DialogFooter>
-            <Button variant="secondary" onClick={() => setIsAddModalOpen(false)}>
-              Cancel
-            </Button>
-            <Button onClick={handleAddAllocation} disabled={createLoading}>
-              {createLoading ? (
-                <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
-              ) : (
-                <Plus className="w-4 h-4 mr-2" />
-              )}
-              Add Allocation
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={isDeleteModalOpen} onOpenChange={setIsDeleteModalOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Delete Allocation</DialogTitle>
-            <DialogDescription>
-              Are you sure you want to delete this allocation?
-            </DialogDescription>
-          </DialogHeader>
-          {deleteError && (
-            <Alert variant="destructive" className="mt-2">
-              <AlertDescription>{deleteError}</AlertDescription>
-            </Alert>
-          )}
-          <DialogFooter>
-            <Button variant="secondary" onClick={() => setIsDeleteModalOpen(false)}>
-              Cancel
-            </Button>
-            <Button
-              variant="destructive"
-              onClick={handleDeleteAllocation}
-              disabled={deleteLoading}
-            >
-              {deleteLoading ? (
-                <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
-              ) : (
-                <Trash2 className="w-4 h-4 mr-2" />
-              )}
-              Delete
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 };

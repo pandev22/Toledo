@@ -1,11 +1,11 @@
 import React, { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useToast } from '@/hooks/use-toast';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -22,13 +22,11 @@ import {
 import {
   Plus,
   Settings,
-  AlertCircle,
   Trash,
   RefreshCw,
   Server,
   Webhook,
   Activity,
-  Check,
   X,
   Shield,
   Info
@@ -208,12 +206,12 @@ function NodeDetails({ node, onClose }) {
 
 // Main Component
 export default function RadarPage() {
+  const { toast } = useToast();
   const queryClient = useQueryClient();
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const [selectedNode, setSelectedNode] = useState(null);
   const [viewingNode, setViewingNode] = useState(null);
-  const [error, setError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const { data: nodes, isLoading } = useQuery({
@@ -233,15 +231,14 @@ export default function RadarPage() {
 
     try {
       setIsSubmitting(true);
-      setError('');
 
       await axios.post('/api/radar/nodes', formData);
 
       setIsCreateModalOpen(false);
       queryClient.invalidateQueries('radar-nodes');
-      setError('success:Node created successfully');
+      toast({ title: 'Success', description: 'Node created successfully' });
     } catch (err) {
-      setError(err.response?.data?.error || 'Failed to create node');
+      toast({ title: 'Error', description: err.response?.data?.error || 'Failed to create node', variant: 'destructive' });
     } finally {
       setIsSubmitting(false);
     }
@@ -253,9 +250,9 @@ export default function RadarPage() {
       setIsDeleteDialogOpen(false);
       setSelectedNode(null);
       queryClient.invalidateQueries('radar-nodes');
-      setError('success:Node deleted successfully');
+      toast({ title: 'Success', description: 'Node deleted successfully' });
     } catch (err) {
-      setError(err.response?.data?.error || 'Failed to delete node');
+      toast({ title: 'Error', description: err.response?.data?.error || 'Failed to delete node', variant: 'destructive' });
     }
   };
 
@@ -273,22 +270,6 @@ export default function RadarPage() {
         </Button>
       </div>
 
-      {/* Error/Success Alert */}
-      {error && (
-        <Alert
-          variant={error.startsWith('success:') ? 'default' : 'destructive'}
-          className="mb-6"
-        >
-          {error.startsWith('success:') ? (
-            <Check className="h-4 w-4" />
-          ) : (
-            <AlertCircle className="h-4 w-4" />
-          )}
-          <AlertDescription>
-            {error.replace('success:', '')}
-          </AlertDescription>
-        </Alert>
-      )}
 
       {/* Nodes List */}
       <Card>

@@ -55,6 +55,7 @@ import {
 import axios from 'axios';
 import { useToast } from '@/hooks/use-toast';
 
+import { ConfirmDialog } from '@/components/ConfirmDialog';
 export default function AdminEggs() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
@@ -240,22 +241,27 @@ export default function AdminEggs() {
               <Plus className="w-4 h-4 mr-2" />
               New Category
             </Button>
-            <Button
-              onClick={() => syncMutation.mutate()}
-              disabled={isSyncing}
-            >
-              {isSyncing ? (
-                <>
-                  <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
-                  Syncing...
-                </>
-              ) : (
-                <>
-                  <Download className="w-4 h-4 mr-2" />
-                  Sync from Panel
-                </>
-              )}
-            </Button>
+            <ConfirmDialog
+              title="Sync Eggs from Panel?"
+              description="This will fetch all eggs from your Pterodactyl panel. New eggs will be added and existing ones will be updated."
+              confirmText="Sync Now"
+              onConfirm={() => syncMutation.mutate()}
+              trigger={
+                <Button disabled={isSyncing}>
+                  {isSyncing ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
+                      Syncing...
+                    </>
+                  ) : (
+                    <>
+                      <Download className="w-4 h-4 mr-2" />
+                      Sync from Panel
+                    </>
+                  )}
+                </Button>
+              }
+            />
           </div>
         </div>
 
@@ -373,14 +379,21 @@ export default function AdminEggs() {
                           <div className="space-y-2">
                             <Egg className="w-12 h-12 mx-auto text-neutral-600" />
                             <p>No eggs synced yet</p>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => syncMutation.mutate()}
-                            >
-                              <Download className="w-4 h-4 mr-2" />
-                              Sync from Panel
-                            </Button>
+                            <ConfirmDialog
+                              title="Sync Eggs from Panel?"
+                              description="This will fetch all eggs from your Pterodactyl panel. New eggs will be added and existing ones will be updated."
+                              confirmText="Sync Now"
+                              onConfirm={() => syncMutation.mutate()}
+                              trigger={
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                >
+                                  <Download className="w-4 h-4 mr-2" />
+                                  Sync from Panel
+                                </Button>
+                              }
+                            />
                           </div>
                         ) : (
                           "No eggs match your filters"
@@ -391,11 +404,27 @@ export default function AdminEggs() {
                     filteredEggs.map(([id, egg]) => (
                       <TableRow key={id}>
                         <TableCell>
-                          <Switch
-                            checked={egg.enabled}
-                            onCheckedChange={() => toggleMutation.mutate(id)}
-                            disabled={toggleMutation.isLoading}
-                          />
+                          {egg.enabled ? (
+                            <ConfirmDialog
+                              title="Disable Egg?"
+                              description={`Are you sure you want to disable ${egg.displayName || egg.originalName}? Users will no longer be able to create servers with this egg.`}
+                              onConfirm={() => toggleMutation.mutate(id)}
+                              variant="destructive"
+                              trigger={
+                                <Switch
+                                  checked={egg.enabled}
+                                  onCheckedChange={() => {}}
+                                  disabled={toggleMutation.isLoading}
+                                />
+                              }
+                            />
+                          ) : (
+                            <Switch
+                              checked={egg.enabled}
+                              onCheckedChange={() => toggleMutation.mutate(id)}
+                              disabled={toggleMutation.isLoading}
+                            />
+                          )}
                         </TableCell>
                         <TableCell>
                           <div>
@@ -450,19 +479,25 @@ export default function AdminEggs() {
                                 <Edit className="w-4 h-4 mr-2" />
                                 Edit Configuration
                               </DropdownMenuItem>
-                              <DropdownMenuItem onClick={() => toggleMutation.mutate(id)}>
-                                {egg.enabled ? (
-                                  <>
-                                    <X className="w-4 h-4 mr-2" />
-                                    Disable
-                                  </>
-                                ) : (
-                                  <>
-                                    <Check className="w-4 h-4 mr-2" />
-                                    Enable
-                                  </>
-                                )}
-                              </DropdownMenuItem>
+                              {egg.enabled ? (
+                                <ConfirmDialog
+                                  title="Disable Egg?"
+                                  description={`Are you sure you want to disable ${egg.displayName || egg.originalName}? Users will no longer be able to create servers with this egg.`}
+                                  onConfirm={() => toggleMutation.mutate(id)}
+                                  variant="destructive"
+                                  trigger={
+                                    <DropdownMenuItem onSelect={(e) => e.preventDefault()}>
+                                      <X className="w-4 h-4 mr-2" />
+                                      Disable
+                                    </DropdownMenuItem>
+                                  }
+                                />
+                              ) : (
+                                <DropdownMenuItem onClick={() => toggleMutation.mutate(id)}>
+                                  <Check className="w-4 h-4 mr-2" />
+                                  Enable
+                                </DropdownMenuItem>
+                              )}
                             </DropdownMenuContent>
                           </DropdownMenu>
                         </TableCell>

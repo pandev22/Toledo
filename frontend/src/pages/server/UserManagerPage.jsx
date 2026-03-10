@@ -8,15 +8,16 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Trash2, Plus, RefreshCw } from 'lucide-react';
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { useToast } from "@/hooks/use-toast";
 
 const UsersPage = () => {
   const { id } = useParams();
+  const { toast } = useToast();
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
-  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
-  const [selectedUser, setSelectedUser] = useState(null);
   const [newUserEmail, setNewUserEmail] = useState('');
 
   const syncSubuserServers = async () => {
@@ -49,24 +50,37 @@ const UsersPage = () => {
       setIsAddModalOpen(false);
       setNewUserEmail('');
       await syncSubuserServers();
+      toast({
+        title: "Success",
+        description: "User has been added to the server.",
+      });
     } catch (err) {
-      setError('Failed to add user. Please try again later.');
+      toast({
+        title: "Error",
+        description: "Failed to add user. Please try again later.",
+        variant: "destructive",
+      });
       console.error(err);
     }
   };
-
-  const handleDeleteUser = async () => {
+  const handleDeleteUser = async (userUuid) => {
     try {
-      await axios.delete(`/api/server/${id}/users/${selectedUser.attributes.uuid}`);
-      setUsers(users.filter(user => user.attributes.uuid !== selectedUser.attributes.uuid));
-      setIsDeleteModalOpen(false);
+      await axios.delete(`/api/server/${id}/users/${userUuid}`);
+      setUsers(users.filter(user => user.attributes.uuid !== userUuid));
       await syncSubuserServers();
+      toast({
+        title: "Success",
+        description: "User has been removed from the server.",
+      });
     } catch (err) {
-      setError('Failed to delete user. Please try again later.');
+      toast({
+        title: "Error",
+        description: "Failed to remove user. Please try again later.",
+        variant: "destructive",
+      });
       console.error(err);
     }
   };
-
   useEffect(() => {
     fetchUsers();
   }, [id]);
@@ -110,17 +124,22 @@ const UsersPage = () => {
                       <TableCell>{user.attributes.username}</TableCell>
                       <TableCell>{user.attributes.email}</TableCell>
                       <TableCell>
-                        <Button
-                          size="sm"
+                        <ConfirmDialog
+                          title="Delete User"
+                          description="Are you sure you want to delete this user? This will remove their access to this server."
+                          confirmText="Delete"
                           variant="destructive"
-                          onClick={() => {
-                            setSelectedUser(user);
-                            setIsDeleteModalOpen(true);
-                          }}
-                        >
-                          <Trash2 className="w-4 h-4 mr-2" />
-                          Delete
-                        </Button>
+                          onConfirm={() => handleDeleteUser(user.attributes.uuid)}
+                          trigger={
+                            <Button
+                              size="sm"
+                              variant="destructive"
+                            >
+                              <Trash2 className="w-4 h-4 mr-2" />
+                              Delete
+                            </Button>
+                          }
+                        />
                       </TableCell>
                     </TableRow>
                   ))}
@@ -151,27 +170,6 @@ const UsersPage = () => {
             <Button onClick={handleAddUser}>
               <Plus className="w-4 h-4 mr-2" />
               Add User
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Delete User Modal */}
-      <Dialog open={isDeleteModalOpen} onOpenChange={setIsDeleteModalOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Delete User</DialogTitle>
-            <DialogDescription>
-              Are you sure you want to delete this user?
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="secondary" onClick={() => setIsDeleteModalOpen(false)}>
-              Cancel
-            </Button>
-            <Button variant="destructive" onClick={handleDeleteUser}>
-              <Trash2 className="w-4 h-4 mr-2" />
-              Delete
             </Button>
           </DialogFooter>
         </DialogContent>
