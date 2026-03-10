@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -98,6 +99,7 @@ export default function AdminUpdater() {
       toast({
         title: 'Update triggered',
         description: 'Checking for updates...',
+        variant: 'default',
       });
       refetchStatus();
     },
@@ -216,23 +218,31 @@ export default function AdminUpdater() {
                     </div>
                   </div>
 
-                  <Button 
-                    className="w-full" 
-                    onClick={() => triggerMutation.mutate()}
-                    disabled={triggerMutation.isPending || status?.updating}
-                  >
-                    {triggerMutation.isPending || status?.updating ? (
-                      <>
-                        <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
-                        {status?.updating ? 'Update in Progress...' : 'Checking...'}
-                      </>
-                    ) : (
-                      <>
-                        <RefreshCw className="w-4 h-4 mr-2" />
-                        Check for Updates
-                      </>
-                    )}
-                  </Button>
+                  <ConfirmDialog
+                    trigger={
+                      <Button 
+                        className="w-full" 
+                        disabled={triggerMutation.isPending || status?.updating}
+                      >
+                        {triggerMutation.isPending || status?.updating ? (
+                          <>
+                            <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
+                            {status?.updating ? "Update in Progress..." : "Checking..."}
+                          </>
+                        ) : (
+                          <>
+                            <RefreshCw className="w-4 h-4 mr-2" />
+                            Check for Updates
+                          </>
+                        )}
+                      </Button>
+                    }
+                    title="Confirm System Update"
+                    description="This will check for updates and automatically apply them if available. Your server might restart during this process. Are you sure you want to proceed?"
+                    confirmText="Check and Update"
+                    cancelText="Cancel"
+                    onConfirm={() => triggerMutation.mutate()}
+                  />
                 </CardContent>
               </Card>
 
@@ -354,22 +364,30 @@ export default function AdminUpdater() {
                 </div>
 
                 <div className="pt-4 flex justify-end">
-                  <Button 
-                    onClick={handleSave}
-                    disabled={saveMutation.isPending}
-                  >
-                    {saveMutation.isPending ? (
-                      <>
-                        <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
-                        Saving...
-                      </>
-                    ) : (
-                      <>
-                        <Save className="w-4 h-4 mr-2" />
-                        Save Configuration
-                      </>
-                    )}
-                  </Button>
+                  <ConfirmDialog
+                    trigger={
+                      <Button 
+                        disabled={saveMutation.isPending}
+                      >
+                        {saveMutation.isPending ? (
+                          <>
+                            <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
+                            Saving...
+                          </>
+                        ) : (
+                          <>
+                            <Save className="w-4 h-4 mr-2" />
+                            Save Configuration
+                          </>
+                        )}
+                      </Button>
+                    }
+                    title="Save Configuration"
+                    description="Are you sure you want to save these updater settings? Incorrect settings might prevent automatic updates from working."
+                    confirmText="Save Changes"
+                    cancelText="Cancel"
+                    onConfirm={handleSave}
+                  />
                 </div>
               </CardContent>
             </Card>
