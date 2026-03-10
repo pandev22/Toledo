@@ -145,7 +145,7 @@ const ViewTicketDialog = ({ isOpen, onClose, ticketId, onStatusChange }) => {
                     : 'bg-[#4e5457] text-white border-[#5e6467] font-medium'
                   }
                 >
-                  {msg.isSystem ? 'System' : msg.isStaff ? 'Staff' : 'User'}
+                  {msg.isStaff ? 'Staff' : msg.isSystem ? 'System' : 'User'}
                 </Badge>
                 <span className="text-xs text-[#95a1ad]">
                   {new Date(msg.timestamp).toLocaleString()}

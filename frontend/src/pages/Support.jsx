@@ -74,7 +74,11 @@ const CreateTicketDialog = ({ isOpen, onClose }) => {
       });
     },
     onError: (err) => {
-      const message = err.response?.data?.error || 'Failed to create ticket';
+      const details = err.response?.data?.details;
+      let message = err.response?.data?.error || 'Failed to create ticket';
+      if (details && Array.isArray(details)) {
+        message = `${message}: ${details.map(d => d.message || d).join(', ')}`;
+      }
       setError(message);
       toast({
         title: "Error",
@@ -86,8 +90,12 @@ const CreateTicketDialog = ({ isOpen, onClose }) => {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!formData.subject.trim() || !formData.description.trim()) {
-      setError('Please fill in all fields');
+    if (formData.subject.trim().length < 3) {
+      setError('Subject must be at least 3 characters');
+      return;
+    }
+    if (formData.description.trim().length < 10) {
+      setError('Description must be at least 10 characters');
       return;
     }
     createMutation.mutate(formData);
@@ -334,24 +342,28 @@ const ViewTicketDialog = ({ isOpen, onClose, ticketId }) => {
               <div
                 key={idx}
                 className={`rounded-lg p-4 ${
-                  msg.isStaff 
-                    ? 'bg-blue-500/10 border border-blue-500/20 ml-4' 
-                    : msg.isSystem
+                  msg.isSystem
                     ? 'bg-gray-500/10 border border-gray-500/20'
+                    : msg.userId === ticket.userId
+                    ? 'bg-[#202229] border border-[#2e3337]/50 mr-4'
+                    : msg.isStaff 
+                    ? 'bg-blue-500/10 border border-blue-500/20 ml-4' 
                     : 'bg-[#202229] border border-[#2e3337]/50 mr-4'
                 }`}
               >
                 <div className="flex justify-between items-start mb-2">
                   <Badge 
                     variant="outline" 
-                    className={msg.isStaff 
-                      ? 'bg-blue-500/20 text-blue-300 border-blue-500/30 font-medium' 
-                      : msg.isSystem
+                    className={msg.isSystem
                       ? 'bg-gray-500/20 text-gray-300 border-gray-500/30 font-medium'
+                      : msg.userId === ticket.userId
+                      ? 'bg-[#3e4347] text-white border-[#4e5457] font-medium'
+                      : msg.isStaff
+                      ? 'bg-blue-500/20 text-blue-300 border-blue-500/30 font-medium' 
                       : 'bg-[#3e4347] text-white border-[#4e5457] font-medium'
                     }
                   >
-                    {msg.isStaff ? 'Support Team' : msg.isSystem ? 'System' : 'You'}
+                    {msg.isSystem ? 'System' : msg.userId === ticket.userId ? 'You' : msg.isStaff ? 'Support Team' : 'User'}
                   </Badge>
                   <span className="text-xs text-[#95a1ad]">
                     {new Date(msg.timestamp).toLocaleString()}

@@ -614,6 +614,7 @@ function formatTicketForDisplay(ticket, includeMessages = true) {
     updated: ticket.updatedAt.getTime(),
     displayId: ticket.id.slice(0, 8).toUpperCase(),
     timeAgo: getTimeAgo(ticket.updatedAt)
+    userId: ticket.userId,
   };
 
   if (includeMessages && ticket.messages) {
@@ -624,6 +625,7 @@ function formatTicketForDisplay(ticket, includeMessages = true) {
       timeAgo: getTimeAgo(msg.createdAt),
       isStaff: msg.isStaff,
       isSystem: msg.isSystem
+      userId: msg.userId,
     }));
   }
 
