@@ -613,7 +613,7 @@ function formatTicketForDisplay(ticket, includeMessages = true) {
     created: ticket.createdAt.getTime(),
     updated: ticket.updatedAt.getTime(),
     displayId: ticket.id.slice(0, 8).toUpperCase(),
-    timeAgo: getTimeAgo(ticket.updatedAt)
+    timeAgo: getTimeAgo(ticket.updatedAt),
     userId: ticket.userId,
   };
 
@@ -624,7 +624,7 @@ function formatTicketForDisplay(ticket, includeMessages = true) {
       timestamp: msg.createdAt.getTime(),
       timeAgo: getTimeAgo(msg.createdAt),
       isStaff: msg.isStaff,
-      isSystem: msg.isSystem
+      isSystem: msg.isSystem,
       userId: msg.userId,
     }));
   }

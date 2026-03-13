@@ -146,7 +146,6 @@ class AFKRewardsManager {
   }
 }
 
-const RENEWAL_BYPASS_PRICE = 3500;
 const RESOURCE_PRICES = {
   ram: settings?.api?.client?.coins?.store?.ram?.cost || 600,
   disk: settings?.api?.client?.coins?.store?.disk?.cost || 400,
@@ -179,33 +178,6 @@ class StoreError extends Error {
 class Store {
   constructor(db) {
     this.db = db;
-  }
-
-  async purchaseRenewalBypass(userId) {
-    const user = await this.db.user.findUnique({ where: { id: userId }, select: { coins: true } });
-    if (!user || user.coins < RENEWAL_BYPASS_PRICE) {
-      throw new StoreError('Insufficient funds', 'INSUFFICIENT_FUNDS');
-    }
-
-    const updatedUser = await this.db.user.update({
-      where: { id: userId },
-      data: {
-        coins: { decrement: RENEWAL_BYPASS_PRICE },
-        renewBypass: true
-      }
-    });
-
-    const purchase = await this.logPurchase(userId, 'renewal_bypass', 1, RENEWAL_BYPASS_PRICE);
-
-    return { purchase, remainingCoins: updatedUser.coins };
-  }
-
-  async hasRenewalBypass(userId) {
-    const user = await this.db.user.findUnique({
-      where: { id: userId },
-      select: { renewBypass: true }
-    });
-    return user?.renewBypass ?? false;
   }
 
   validateResourceAmount(resourceType, amount) {
@@ -310,8 +282,7 @@ module.exports.load = function (app, db) {
 
       const configResponse = {
         prices: {
-          resources: RESOURCE_PRICES,
-          renewalBypass: RENEWAL_BYPASS_PRICE
+          resources: RESOURCE_PRICES
         },
         multipliers: RESOURCE_MULTIPLIERS,
         limits: MAX_RESOURCE_LIMITS,
@@ -320,8 +291,7 @@ module.exports.load = function (app, db) {
           ram: userCoins >= RESOURCE_PRICES.ram,
           disk: userCoins >= RESOURCE_PRICES.disk,
           cpu: userCoins >= RESOURCE_PRICES.cpu,
-          servers: userCoins >= RESOURCE_PRICES.servers,
-          renewalBypass: userCoins >= RENEWAL_BYPASS_PRICE
+          servers: userCoins >= RESOURCE_PRICES.servers
         }
       };
 
@@ -333,50 +303,6 @@ module.exports.load = function (app, db) {
         message: error.message,
         stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
       });
-    }
-  });
-
-  app.post('/api/store/renewal-bypass', async (req, res) => {
-    try {
-      if (!req.session?.userinfo) return res.status(401).json({ error: 'Unauthorized' });
-
-      const userId = req.session.userinfo.id;
-      if (await store.hasRenewalBypass(userId)) {
-        return res.status(400).json({ error: 'Already purchased', code: 'ALREADY_PURCHASED' });
-      }
-
-      const result = await store.purchaseRenewalBypass(userId);
-      res.json({
-        success: true,
-        purchase: result.purchase,
-        remainingCoins: result.remainingCoins
-      });
-
-    } catch (error) {
-      if (error instanceof StoreError) {
-        return res.status(400).json({ error: error.message, code: error.code });
-      }
-      res.status(500).json({ error: 'Internal server error' });
-    }
-  });
-
-  app.get('/api/store/renewal-bypass', async (req, res) => {
-    try {
-      if (!req.session?.userinfo) return res.status(401).json({ error: 'Unauthorized' });
-
-      const userId = req.session.userinfo.id;
-      const hasBypass = await store.hasRenewalBypass(userId);
-      const user = await db.user.findUnique({ where: { id: userId }, select: { coins: true } });
-      const userCoins = user?.coins ?? 0;
-
-      res.json({
-        hasRenewalBypass: hasBypass,
-        price: RENEWAL_BYPASS_PRICE,
-        canAfford: userCoins >= RENEWAL_BYPASS_PRICE,
-        currentBalance: userCoins
-      });
-    } catch (error) {
-      res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -616,7 +542,7 @@ module.exports.load = function (app, db) {
 
   async function enabledCheck(req, res) {
     let newsettings = loadConfig("./config.toml");
-    if (newsettings.api.client.coins.store.enabled == true) return newsettings;
+    if (newsettings.api.client.coins.store.enabled === true) return newsettings;
     let theme = indexjs.get(req);
     // Note: ejs is not defined in this scope, but the original code used it. 
     // Assuming it's globally available or handled by indexjs.

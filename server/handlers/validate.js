@@ -579,11 +579,6 @@ const schemas = {
     })
   }),
 
-  // Store renewal bypass
-  renewalBypass: z.object({
-    serverId: z.string({ required_error: 'Server ID is required' }).min(1).trim()
-  }),
-
   // Auth 2FA verify (for login flow)
   auth2FAVerify: z.object({
     token: z.string({ required_error: 'Token is required' })

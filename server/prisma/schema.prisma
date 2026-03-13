@@ -43,7 +43,6 @@ model User {
   creditUsd   Float   @default(0)
   packageName String  @default("default")
   sftpPassword String?
-  renewBypass Boolean @default(false)
 
   // Extra resources (purchased / earned)
   extraRam     Int @default(0)
