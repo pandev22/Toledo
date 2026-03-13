@@ -470,11 +470,15 @@ module.exports.load = async function (app, db) {
             // Create server on Pterodactyl
             const response = await pteroApi.post('/api/application/servers', serverSpec);
 
-            await initializeServerRenewal(
-                db,
-                response.data.attributes,
-                req.session.userinfo.id
-            );
+            try {
+                await initializeServerRenewal(
+                    db,
+                    response.data.attributes,
+                    req.session.userinfo.id
+                );
+            } catch (renewalError) {
+                console.error('Failed to initialize server renewal:', renewalError);
+            }
 
             // Log server creation
             log('server_created',
@@ -711,10 +715,14 @@ module.exports.load = async function (app, db) {
             // Send delete request to Pterodactyl
             await pteroApi.delete(`/api/application/servers/${serverId}/force`);
 
-            await removeServerRenewal(db, {
-                identifier: server.attributes.identifier,
-                panelId: serverId
-            });
+            try {
+                await removeServerRenewal(db, {
+                    identifier: server.attributes.identifier,
+                    panelId: serverId
+                });
+            } catch (renewalError) {
+                console.error('Failed to remove server renewal:', renewalError);
+            }
 
             // Log the deletion
             log('server_deleted',
