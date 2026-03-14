@@ -9,7 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import {
   Download, Search, RefreshCw, Star, Loader2, Gem,
   Filter, ExternalLink, Package, Check, Info,
-  CheckCircle2, AlertCircle, X
+  CheckCircle2, AlertCircle, X, Trash, MoreHorizontal
 } from 'lucide-react';
 
 import {
@@ -66,6 +66,7 @@ import {
 } from "@/components/ui/alert";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { useToast } from "@/hooks/use-toast";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 
 const PluginsPage = () => {
   const { id } = useParams();
@@ -90,6 +91,7 @@ const PluginsPage = () => {
   const searchTimeoutRef = useRef(null);
   const [page, setPage] = useState(1);
   const [hasMorePages, setHasMorePages] = useState(true);
+  const [untrackingPluginId, setUntrackingPluginId] = useState(null);
 
   // Load platforms
   const fetchPlatforms = async () => {
@@ -278,7 +280,7 @@ const PluginsPage = () => {
 
     try {
       const response = await axios.post(`/api/plugins/install/${id}`, {
-        pluginId,
+        pluginId: String(pluginId),
         platform
       });
 
@@ -321,6 +323,36 @@ const PluginsPage = () => {
       setModalView('details');
       setInstallStatus({ success: null, message: '' });
     }, 200);
+  };
+
+  // Handle untrack plugin
+  const handleUntrackPlugin = async (pluginId, platform, pluginName) => {
+    setUntrackingPluginId(pluginId);
+    try {
+      await axios.delete(`/api/plugins/untrack/${id}`, {
+        data: {
+          pluginId: String(pluginId),
+          platform: String(platform)
+        }
+      });
+      
+      // Update installed plugins list
+      await fetchInstalledPlugins();
+      
+      toast({
+        title: "Plugin Hidden",
+        description: `${pluginName} is no longer tracked. Use Scan & Retrack to add it back from your server files.`
+      });
+    } catch (err) {
+      console.error('Failed to untrack plugin:', err);
+      toast({
+        title: "Removal Failed",
+        description: err.response?.data?.error || "Could not untrack the plugin.",
+        variant: "destructive"
+      });
+    } finally {
+      setUntrackingPluginId(null);
+    }
   };
 
   // Initialize data on component mount
@@ -649,12 +681,16 @@ const PluginsPage = () => {
                     size="sm"
                     onClick={() => fetchInstalledPlugins(true)}
                     disabled={loading}
+                    title="Re-scan the /plugins folder and restore tracked plugins"
                   >
                     <Search className="w-4 h-4 mr-2" />
-                    Scan Directory
+                    Scan & Retrack
                   </Button>
                 </div>
               </div>
+              <p className="text-sm text-neutral-400 mt-2">
+                Hidden a plugin by mistake? Use Scan & Retrack to restore plugins that still exist in your server files.
+              </p>
             </CardHeader>
             <CardContent>
               {installedPlugins.length === 0 ? (
@@ -677,7 +713,9 @@ const PluginsPage = () => {
                     <TableRow>
                       <TableHead>Name</TableHead>
                       <TableHead>Platform</TableHead>
+                      <TableHead>Status</TableHead>
                       <TableHead>Installed Date</TableHead>
+                      <TableHead className="text-right">Actions</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -689,7 +727,58 @@ const PluginsPage = () => {
                             {plugin.platform}
                           </Badge>
                         </TableCell>
+                        <TableCell>
+                          {plugin.manuallyAdded ? (
+                            <Badge variant="secondary" className="bg-amber-500/20 text-amber-400 border-amber-500/20">
+                              <Info className="w-3 h-3 mr-1" />
+                              Manual
+                            </Badge>
+                          ) : (
+                            <Badge variant="outline" className="bg-blue-500/20 text-blue-400 border-blue-500/20">
+                              <ExternalLink className="w-3 h-3 mr-1" />
+                              Marketplace
+                            </Badge>
+                          )}
+                        </TableCell>
                         <TableCell>{formatDate(plugin.installedAt)}</TableCell>
+                        <TableCell className="text-right">
+                          <div className="flex items-center justify-end gap-2">
+                            {/* External Link - only for marketplace plugins */}
+                            {plugin.external_url && (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => window.open(plugin.external_url, '_blank')}
+                                title="Open in Marketplace"
+                              >
+                                <ExternalLink className="w-4 h-4" />
+                              </Button>
+                            )}
+                            
+                            {/* Hide tracking action */}
+                            <ConfirmDialog
+                              title="Hide Plugin"
+                              description={`Hide "${plugin.name}" from the tracked list? This will keep the plugin files on your server, and you can bring it back with Scan & Retrack.`}
+                              confirmText="Hide"
+                              onConfirm={() => handleUntrackPlugin(plugin.id, plugin.platform, plugin.name)}
+                              variant="destructive"
+                              trigger={
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  disabled={untrackingPluginId === plugin.id}
+                                  title="Hide plugin from tracking"
+                                >
+                                  {untrackingPluginId === plugin.id ? (
+                                    <Loader2 className="w-4 h-4 animate-spin" />
+                                  ) : (
+                                    <Trash className="w-4 h-4 text-red-500" />
+                                  )}
+                                </Button>
+                              }
+                            />
+                          </div>
+                        </TableCell>
                       </TableRow>
                     ))}
                   </TableBody>

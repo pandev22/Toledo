@@ -47,6 +47,63 @@ module.exports.load = async function (app, db) {
     return `https://www.spigotmc.org/${url.replace(/^\/+/, "")}`;
   };
 
+  const getServerFilesList = async (serverId, directory) => {
+    const response = await axios.get(
+      `${PANEL_URL}/api/client/servers/${serverId}/files/list`,
+      {
+        params: { directory },
+        headers: {
+          Authorization: `Bearer ${API_KEY}`,
+          Accept: "application/json",
+        },
+      }
+    );
+
+    return Array.isArray(response.data?.data) ? response.data.data : [];
+  };
+
+  const getPluginDirectoryFiles = async (serverId) => {
+    try {
+      return await getServerFilesList(serverId, "/plugins");
+    } catch (error) {
+      const status = error.response?.status;
+
+      if (status !== 404 && status !== 500) {
+        throw error;
+      }
+
+      const rootEntries = await getServerFilesList(serverId, "/");
+      const hasPluginsDirectory = rootEntries.some((entry) => {
+        const attributes = entry?.attributes;
+        return attributes?.name === "plugins" && attributes?.is_file === false;
+      });
+
+      if (!hasPluginsDirectory) {
+        return [];
+      }
+
+      throw error;
+    }
+  };
+
+  const getInstalledPluginExternalUrl = (pluginId, platform) => {
+    if (platform === 'spigot') {
+      return `https://www.spigotmc.org/resources/${pluginId}`;
+    }
+
+    return null;
+  };
+
+  const serializeInstalledPlugin = (plugin) => ({
+    id: plugin.pluginId,
+    name: plugin.name,
+    pluginName: plugin.pluginName,
+    platform: plugin.platform,
+    installedAt: plugin.installedAt.toISOString(),
+    manuallyAdded: plugin.manuallyAdded,
+    external_url: getInstalledPluginExternalUrl(plugin.pluginId, plugin.platform)
+  });
+
   // Cache mechanism to reduce API calls
   const cache = {
     plugins: {},
@@ -445,21 +502,8 @@ module.exports.load = async function (app, db) {
 
     try {
       // Get file listing from Pterodactyl
-      const response = await axios.get(
-        `${PANEL_URL}/api/client/servers/${serverId}/files/list`,
-        {
-          params: {
-            directory: '/plugins'
-          },
-          headers: {
-            Authorization: `Bearer ${API_KEY}`,
-            Accept: "application/json",
-          },
-        }
-      );
-
       // Extract .jar files
-      const pluginFiles = response.data.data
+      const pluginFiles = (await getPluginDirectoryFiles(serverId))
         .filter(file => file.attributes.name.endsWith('.jar'))
         .map(file => ({
           name: file.attributes.name.replace(/\.jar$/, ''),
@@ -471,14 +515,7 @@ module.exports.load = async function (app, db) {
       let installedPlugins = [];
       if (db) {
         const plugins = await db.installedPlugin.findMany({ where: { serverId } });
-        installedPlugins = plugins.map(p => ({
-          id: p.pluginId,
-          name: p.name,
-          pluginName: p.pluginName,
-          platform: p.platform,
-          installedAt: p.installedAt.toISOString(),
-          manuallyAdded: p.manuallyAdded
-        }));
+        installedPlugins = plugins.map(serializeInstalledPlugin);
       }
 
       // Add plugin files not already in DB
@@ -511,14 +548,7 @@ module.exports.load = async function (app, db) {
       // Re-fetch installed plugins after potential additions
       if (db && added > 0) {
         const plugins = await db.installedPlugin.findMany({ where: { serverId } });
-        installedPlugins = plugins.map(p => ({
-          id: p.pluginId,
-          name: p.name,
-          pluginName: p.pluginName,
-          platform: p.platform,
-          installedAt: p.installedAt.toISOString(),
-          manuallyAdded: p.manuallyAdded
-        }));
+        installedPlugins = plugins.map(serializeInstalledPlugin);
       }
       res.json({
         success: true,
@@ -697,14 +727,7 @@ module.exports.load = async function (app, db) {
       let installedPlugins = [];
       if (db) {
         const plugins = await db.installedPlugin.findMany({ where: { serverId } });
-        installedPlugins = plugins.map(p => ({
-          id: p.pluginId,
-          name: p.name,
-          pluginName: p.pluginName,
-          platform: p.platform,
-          installedAt: p.installedAt.toISOString(),
-          manuallyAdded: p.manuallyAdded
-        }));
+        installedPlugins = plugins.map(serializeInstalledPlugin);
       }
 
       // Return the list of installed plugins
@@ -713,6 +736,46 @@ module.exports.load = async function (app, db) {
       console.error("Error fetching installed plugins:", error);
       // Return empty array on error instead of error message
       res.json([]);
+    }
+  });
+
+  router.delete("/plugins/untrack/:serverId", isAuthenticated, ownsServer, validate(schemas.pluginUntrack), async (req, res) => {
+    const { serverId } = req.params;
+    const { pluginId, platform } = req.body;
+
+    try {
+      if (!db) {
+        return res.status(503).json({
+          success: false,
+          error: "Plugin tracking database is unavailable"
+        });
+      }
+
+      const result = await db.installedPlugin.deleteMany({
+        where: {
+          serverId,
+          pluginId,
+          platform
+        }
+      });
+
+      if (result.count === 0) {
+        return res.status(404).json({
+          success: false,
+          error: "Plugin tracking entry not found"
+        });
+      }
+
+      res.json({
+        success: true,
+        message: "Plugin untracked successfully"
+      });
+    } catch (error) {
+      console.error("Error untracking plugin:", error);
+      res.status(500).json({
+        success: false,
+        error: "Failed to untrack plugin"
+      });
     }
   });
 

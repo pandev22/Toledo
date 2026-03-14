@@ -605,6 +605,12 @@ const schemas = {
     }).optional()
   }),
 
+  // Plugin untrack
+  pluginUntrack: z.object({
+    pluginId: z.string({ required_error: 'Plugin ID is required' }).min(1).trim(),
+    platform: z.string({ required_error: 'Platform is required' }).min(1).trim()
+  }),
+
   // 2FA login verification (accepts TOTP or backup codes)
   auth2FALoginVerify: z.object({
     code: z.string({ required_error: 'Verification code is required' })
