@@ -35,6 +35,18 @@ module.exports.load = async function (app, db) {
   const BUKKIT_API_BASE = "https://dev.bukkit.org/api";
   const MODRINTH_API_BASE = "https://api.modrinth.com/v2";
 
+  const normalizeSpigotIconUrl = (url) => {
+    if (!url) {
+      return null;
+    }
+
+    if (/^https?:\/\//i.test(url)) {
+      return url;
+    }
+
+    return `https://www.spigotmc.org/${url.replace(/^\/+/, "")}`;
+  };
+
   // Cache mechanism to reduce API calls
   const cache = {
     plugins: {},
@@ -152,7 +164,7 @@ module.exports.load = async function (app, db) {
           },
           downloads: plugin.downloads || 0,
           rating: plugin.rating || { average: 0 },
-          icon: plugin.icon?.url || null,
+          icon: normalizeSpigotIconUrl(plugin.icon?.url),
           premium: plugin.premium || false,
           price: plugin.price || null,
           author: {
@@ -264,7 +276,7 @@ module.exports.load = async function (app, db) {
           },
           downloads: plugin.downloads || 0,
           rating: plugin.rating || { average: 0 },
-          icon: plugin.icon?.url || null,
+          icon: normalizeSpigotIconUrl(plugin.icon?.url),
           premium: plugin.premium || false,
           price: plugin.price || null,
           author: {
@@ -365,7 +377,7 @@ module.exports.load = async function (app, db) {
           })),
           downloads: detailsResponse.data.downloads || 0,
           rating: detailsResponse.data.rating || { average: 0 },
-          icon: detailsResponse.data.icon?.url || null,
+          icon: normalizeSpigotIconUrl(detailsResponse.data.icon?.url),
           premium: detailsResponse.data.premium || false,
           price: detailsResponse.data.price || null,
           author: {

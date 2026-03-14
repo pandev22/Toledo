@@ -64,6 +64,7 @@ import {
   Alert,
   AlertDescription,
 } from "@/components/ui/alert";
+import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { useToast } from "@/hooks/use-toast";
 
 const PluginsPage = () => {
@@ -382,24 +383,37 @@ const PluginsPage = () => {
         onClick={() => handlePluginClick(plugin)}
       >
         <CardHeader className="pb-2">
-          <div className="flex items-start justify-between gap-2">
+          <div className="flex items-start gap-3">
+            <Avatar className="h-10 w-10 rounded-md flex-shrink-0">
+              <AvatarImage 
+                src={plugin.icon} 
+                alt={`${plugin.name} icon`}
+              />
+              <AvatarFallback className="rounded-md bg-neutral-800 text-neutral-400 text-sm">
+                {plugin.name?.charAt(0)?.toUpperCase() || 'P'}
+              </AvatarFallback>
+            </Avatar>
             <div className="flex-1 min-w-0">
-              <CardTitle className="text-base truncate">{plugin.name}</CardTitle>
-              <CardDescription className="text-xs text-neutral-400 line-clamp-2">
-                {plugin.tag}
-              </CardDescription>
+              <div className="flex items-start justify-between gap-2">
+                <div className="flex-1 min-w-0">
+                  <CardTitle className="text-base truncate">{plugin.name}</CardTitle>
+                  <CardDescription className="text-xs text-neutral-400 line-clamp-2">
+                    {plugin.tag}
+                  </CardDescription>
+                </div>
+                {plugin.premium ? (
+                  <Badge variant="outline" className="bg-amber-500/20 text-amber-400 border-amber-500/20">
+                    <Gem className="w-3 h-3 mr-1" />
+                    Premium
+                  </Badge>
+                ) : installed ? (
+                  <Badge variant="outline" className="bg-green-500/20 text-green-400 border-green-500/20">
+                    <Check className="w-3 h-3 mr-1" />
+                    Installed
+                  </Badge>
+                ) : null}
+              </div>
             </div>
-            {plugin.premium ? (
-              <Badge variant="outline" className="bg-amber-500/20 text-amber-400 border-amber-500/20">
-                <Gem className="w-3 h-3 mr-1" />
-                Premium
-              </Badge>
-            ) : installed ? (
-              <Badge variant="outline" className="bg-green-500/20 text-green-400 border-green-500/20">
-                <Check className="w-3 h-3 mr-1" />
-                Installed
-              </Badge>
-            ) : null}
           </div>
         </CardHeader>
         <CardContent className="flex-1 pt-0">
@@ -694,15 +708,30 @@ const PluginsPage = () => {
           {modalView === 'details' && selectedPlugin && (
             <>
               <DialogHeader>
-                <div className="flex items-center justify-between">
-                  <DialogTitle>{selectedPlugin.name}</DialogTitle>
-                  {selectedPlugin.platform && (
-                    <Badge variant="outline" className="capitalize">
-                      {selectedPlugin.platform}
-                    </Badge>
-                  )}
+                <div className="flex items-center gap-3">
+                  <Avatar className="h-12 w-12 rounded-md flex-shrink-0">
+                    <AvatarImage 
+                      src={pluginDetails?.icon || selectedPlugin.icon} 
+                      alt={`${selectedPlugin.name} icon`}
+                    />
+                    <AvatarFallback className="rounded-md bg-neutral-800 text-neutral-400">
+                      {selectedPlugin.name?.charAt(0)?.toUpperCase() || 'P'}
+                    </AvatarFallback>
+                  </Avatar>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between gap-2">
+                      <DialogTitle className="truncate">{selectedPlugin.name}</DialogTitle>
+                      {selectedPlugin.platform && (
+                        <Badge variant="outline" className="capitalize flex-shrink-0">
+                          {selectedPlugin.platform}
+                        </Badge>
+                      )}
+                    </div>
+                    <DialogDescription className="line-clamp-2 mt-1">
+                      {selectedPlugin.tag}
+                    </DialogDescription>
+                  </div>
                 </div>
-                <DialogDescription>{selectedPlugin.tag}</DialogDescription>
               </DialogHeader>
 
               {!pluginDetails ? (
