@@ -704,11 +704,11 @@ const PluginsPage = () => {
       <Dialog open={isModalOpen} onOpenChange={(open) => {
         if (!open) handleCloseModal();
       }}>
-        <DialogContent className="sm:max-w-[500px]">
+        <DialogContent className="sm:max-w-[500px] text-white">
           {modalView === 'details' && selectedPlugin && (
             <>
               <DialogHeader>
-                <div className="flex items-center gap-3">
+                <div className="flex items-center gap-3 pr-8">
                   <Avatar className="h-12 w-12 rounded-md flex-shrink-0">
                     <AvatarImage 
                       src={pluginDetails?.icon || selectedPlugin.icon} 
@@ -722,7 +722,7 @@ const PluginsPage = () => {
                     <div className="flex items-center justify-between gap-2">
                       <DialogTitle className="truncate">{selectedPlugin.name}</DialogTitle>
                       {selectedPlugin.platform && (
-                        <Badge variant="outline" className="capitalize flex-shrink-0">
+                        <Badge variant="outline" className="capitalize flex-shrink-0 border-neutral-600 text-white">
                           {selectedPlugin.platform}
                         </Badge>
                       )}
@@ -742,46 +742,46 @@ const PluginsPage = () => {
                 <div className="space-y-4 my-2">
                   {/* Plugin stats */}
                   <div className="flex flex-wrap gap-3">
-                    <Badge variant="secondary" className="flex items-center">
-                      <Download className="w-3 h-3 mr-1" />
-                      {(pluginDetails.downloads || 0).toLocaleString()} downloads
-                    </Badge>
-                    <div className="flex items-center gap-1">
-                      <Star className="w-4 h-4 text-amber-400" />
-                      <span>{pluginDetails.rating?.average?.toFixed(1) || 'N/A'}</span>
+                      <Badge variant="secondary" className="flex items-center border border-neutral-700 bg-neutral-800 text-white hover:bg-neutral-800">
+                        <Download className="w-3 h-3 mr-1" />
+                        {(pluginDetails.downloads || 0).toLocaleString()} downloads
+                      </Badge>
+                      <div className="flex items-center gap-1">
+                        <Star className="w-4 h-4 text-amber-400" />
+                        <span className="text-white">{pluginDetails.rating?.average?.toFixed(1) || 'N/A'}</span>
+                      </div>
                     </div>
-                  </div>
 
                   {/* Version info */}
                   <div className="grid grid-cols-2 gap-2">
                     <div>
-                      <h4 className="text-sm font-medium mb-1">Version</h4>
+                      <h4 className="mb-1 text-sm font-medium text-neutral-300">Version</h4>
                       <p className="text-sm text-neutral-400">{pluginDetails.version?.name || 'Latest'}</p>
                     </div>
                     <div>
-                      <h4 className="text-sm font-medium mb-1">Author</h4>
+                      <h4 className="mb-1 text-sm font-medium text-neutral-300">Author</h4>
                       <p className="text-sm text-neutral-400">{pluginDetails.author?.name || 'Unknown'}</p>
                     </div>
                     <div>
-                      <h4 className="text-sm font-medium mb-1">Last Updated</h4>
+                      <h4 className="mb-1 text-sm font-medium text-neutral-300">Last Updated</h4>
                       <p className="text-sm text-neutral-400">{formatDate(pluginDetails.updateDate)}</p>
                     </div>
                     <div>
-                      <h4 className="text-sm font-medium mb-1">Released</h4>
+                      <h4 className="mb-1 text-sm font-medium text-neutral-300">Released</h4>
                       <p className="text-sm text-neutral-400">{formatDate(pluginDetails.releaseDate)}</p>
                     </div>
                   </div>
                 </div>
               )}
 
-              <DialogFooter className="flex gap-2 sm:gap-0">
-                <Button
-                  variant="outline"
-                  size="icon"
-                  onClick={() => window.open(pluginDetails?.external_url, '_blank')}
-                >
-                  <ExternalLink className="w-4 h-4" />
-                </Button>
+              <DialogFooter className="flex flex-col-reverse sm:flex-row gap-2 sm:gap-2 items-stretch sm:items-center">
+                  <Button
+                    size="icon"
+                    className="h-10 w-10"
+                    onClick={() => window.open(pluginDetails?.external_url, '_blank')}
+                  >
+                    <ExternalLink className="w-4 h-4" />
+                  </Button>
 
                 {selectedPlugin.premium ? (
                   <Button
