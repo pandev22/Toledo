@@ -58,7 +58,8 @@ export default function AdminEggs() {
   const [categoryFilter, setCategoryFilter] = useState('all');
   const [selectedEgg, setSelectedEgg] = useState(null);
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
-  const [isCategoryDialogOpen, setIsCategoryDialogOpen] = useState(false);
+  const [isManageCategoriesOpen, setIsManageCategoriesOpen] = useState(false);
+  const [isCreateCategoryOpen, setIsCreateCategoryOpen] = useState(false);
   const [newCategory, setNewCategory] = useState({ id: '', name: '', icon: 'folder' });
   const [isSyncing, setIsSyncing] = useState(false);
   const [pendingDisableEgg, setPendingDisableEgg] = useState(null);
@@ -158,7 +159,7 @@ export default function AdminEggs() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries(['admin-eggs']);
-      setIsCategoryDialogOpen(false);
+      setIsCreateCategoryOpen(false);
       setNewCategory({ id: '', name: '', icon: 'folder' });
       toast({
         title: "Category Created",
@@ -170,6 +171,28 @@ export default function AdminEggs() {
         title: "Creation Failed",
         description: error.response?.data?.error || "Failed to create category",
         variant: "destructive"
+      });
+    }
+  });
+
+  const deleteCategoryMutation = useMutation({
+    mutationFn: async (category) => {
+      await axios.delete(`/api/admin/eggs/categories/${category.id}`);
+      return category;
+    },
+    onSuccess: (category) => {
+      queryClient.invalidateQueries(['admin-eggs']);
+      setCategoryFilter((current) => current === category.id ? 'all' : current);
+      toast({
+        title: 'Category Deleted',
+        description: `${category.name} was deleted and its eggs were moved to Other.`,
+      });
+    },
+    onError: (error) => {
+      toast({
+        title: 'Deletion Failed',
+        description: error.response?.data?.error || 'Failed to delete category',
+        variant: 'destructive'
       });
     }
   });
@@ -244,10 +267,10 @@ export default function AdminEggs() {
           <div className="flex items-center gap-2">
             <Button
               variant="outline"
-              onClick={() => setIsCategoryDialogOpen(true)}
+              onClick={() => setIsManageCategoriesOpen(true)}
             >
-              <Plus className="w-4 h-4 mr-2" />
-              New Category
+              <Layers className="w-4 h-4 mr-2" />
+              Manage Categories
             </Button>
             <ConfirmDialog
               title="Sync Eggs from Panel?"
@@ -563,12 +586,14 @@ export default function AdminEggs() {
                         category: value
                       })}
                     >
-                      <SelectTrigger>
-                        <SelectValue />
+                      <SelectTrigger className="border-neutral-700 bg-[#111111] text-white [&>span]:text-white">
+                        <SelectValue placeholder="Select category" />
                       </SelectTrigger>
-                      <SelectContent>
+                      <SelectContent className="border-neutral-800 bg-[#111111] text-white">
                         {eggsData?.categories?.map(cat => (
-                          <SelectItem key={cat.id} value={cat.id}>{cat.name}</SelectItem>
+                          <SelectItem key={cat.id} value={cat.id} className="text-white focus:bg-neutral-800 focus:text-white">
+                            {cat.name}
+                          </SelectItem>
                         ))}
                       </SelectContent>
                     </Select>
@@ -693,7 +718,7 @@ export default function AdminEggs() {
                   </div>
 
                   <Alert className="bg-neutral-900 border-neutral-800 flex items-center gap-3">
-                    <AlertCircle className="h-4 w-4 text-neutral-400 shrink-0" />
+                    <AlertCircle className="h-4 w-4 invert shrink-0" />
                     <AlertDescription className="text-xs text-neutral-300">
                       Advanced settings override the Pterodactyl egg configuration. Changes will be preserved on sync.
                     </AlertDescription>
@@ -732,61 +757,142 @@ export default function AdminEggs() {
         </DialogContent>
       </Dialog>
 
-      {/* Create Category Dialog */}
-      <Dialog open={isCategoryDialogOpen} onOpenChange={setIsCategoryDialogOpen}>
+      <Dialog open={isManageCategoriesOpen} onOpenChange={(open) => {
+            setIsManageCategoriesOpen(open);
+            if (!open) {
+              setIsCreateCategoryOpen(false);
+            }
+          }}>
         <DialogContent className="bg-[#0a0a0a] border-neutral-800">
           <DialogHeader>
-            <DialogTitle className="text-white">Create Category</DialogTitle>
+            <DialogTitle className="text-white">Manage Categories</DialogTitle>
             <DialogDescription>
-              Add a new category to organize your eggs
+              Create or delete categories. Eggs in a deleted category will automatically move to Other.
             </DialogDescription>
           </DialogHeader>
 
           <div className="space-y-4">
-            <div className="space-y-2">
-              <Label>Category ID</Label>
-              <Input
-                value={newCategory.id}
-                onChange={(e) => setNewCategory({
-                  ...newCategory,
-                  id: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '')
-                })}
-                placeholder="e.g. minecraft, bots, web"
-              />
-              <p className="text-xs text-neutral-500">
-                Lowercase letters, numbers and dashes only
-              </p>
-            </div>
+            {/* Create Category Button */}
+            <Button
+              variant="outline"
+              className="w-full justify-start"
+              onClick={() => setIsCreateCategoryOpen(!isCreateCategoryOpen)}
+            >
+              <Plus className="w-4 h-4 mr-2" />
+              {isCreateCategoryOpen ? 'Cancel' : 'Create Category'}
+            </Button>
 
-            <div className="space-y-2">
-              <Label>Display Name</Label>
-              <Input
-                value={newCategory.name}
-                onChange={(e) => setNewCategory({
-                  ...newCategory,
-                  name: e.target.value
-                })}
-                placeholder="e.g. Minecraft Servers"
-              />
+            {/* Collapsible Create Category Form */}
+            {isCreateCategoryOpen && (
+              <div className="rounded-lg border border-neutral-800 bg-[#111111] p-4 space-y-4 animate-in slide-in-from-top-2 duration-200">
+                <div>
+                  <h3 className="font-medium text-white">New Category</h3>
+                  <p className="text-sm text-neutral-400">Add a new category to organize your eggs.</p>
+                </div>
+
+                <div className="space-y-2">
+                  <Label>Category ID</Label>
+                  <Input
+                    value={newCategory.id}
+                    onChange={(e) => setNewCategory({
+                      ...newCategory,
+                      id: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '')
+                    })}
+                    placeholder="e.g. minecraft, bots, web"
+                  />
+                  <p className="text-xs text-neutral-500">
+                    Lowercase letters, numbers and dashes only
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  <Label>Display Name</Label>
+                  <Input
+                    value={newCategory.name}
+                    onChange={(e) => setNewCategory({
+                      ...newCategory,
+                      name: e.target.value
+                    })}
+                    placeholder="e.g. Minecraft Servers"
+                  />
+                </div>
+
+                <div className="flex justify-end">
+                  <Button
+                    onClick={() => createCategoryMutation.mutate(newCategory)}
+                    disabled={!newCategory.id || !newCategory.name || createCategoryMutation.isLoading}
+                  >
+                    {createCategoryMutation.isLoading ? (
+                      <>
+                        <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
+                        Creating...
+                      </>
+                    ) : (
+                      <>
+                        <Plus className="w-4 h-4 mr-2" />
+                        Create
+                      </>
+                    )}
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {/* Categories List */}
+            <div className="space-y-3 max-h-[40vh] overflow-y-auto">
+              {eggsData?.categories?.map((category) => {
+                const isDefaultOther = category.id === 'other';
+                const isDeleting = deleteCategoryMutation.isPending && deleteCategoryMutation.variables?.id === category.id;
+
+                return (
+                  <div key={category.id} className="flex items-center justify-between rounded-lg border border-neutral-800 bg-[#111111] px-4 py-3">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <p className="font-medium text-white truncate">{category.name}</p>
+                      {isDefaultOther && (
+                        <Badge variant="outline" className="border-neutral-700 text-neutral-300">Protected</Badge>
+                      )}
+                    </div>
+                    <p className="text-xs text-neutral-500">ID: {category.id}</p>
+                  </div>
+
+                  {isDefaultOther ? (
+                    <Button variant="ghost" size="sm" disabled className="text-neutral-500">
+                      Cannot Delete
+                    </Button>
+                  ) : (
+                    <ConfirmDialog
+                      title="Delete Category"
+                      description={`Delete ${category.name}? Eggs in this category will be moved to Other.`}
+                      confirmText="Delete"
+                      variant="destructive"
+                      onConfirm={() => deleteCategoryMutation.mutate(category)}
+                      trigger={
+                        <Button variant="ghost" size="sm" disabled={isDeleting} className="text-red-400 hover:text-red-300 hover:bg-red-500/10">
+                          {isDeleting ? (
+                            <>
+                              <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
+                              Deleting...
+                            </>
+                          ) : (
+                            <>
+                              <X className="w-4 h-4 mr-2" />
+                              Delete
+                            </>
+                          )}
+                        </Button>
+                      }
+                    />
+                  )}
+                </div>
+                );
+              })}
             </div>
           </div>
 
           <DialogFooter>
-            <Button variant="outline" onClick={() => setIsCategoryDialogOpen(false)}>
-              Cancel
-            </Button>
-            <Button
-              onClick={() => createCategoryMutation.mutate(newCategory)}
-              disabled={!newCategory.id || !newCategory.name || createCategoryMutation.isLoading}
-            >
-              {createCategoryMutation.isLoading ? (
-                <>
-                  <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
-                  Creating...
-                </>
-              ) : (
-                'Create Category'
-              )}
+            <Button variant="outline" onClick={() => setIsManageCategoriesOpen(false)}>
+              Close
             </Button>
           </DialogFooter>
         </DialogContent>
