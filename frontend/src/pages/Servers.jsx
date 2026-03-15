@@ -82,7 +82,9 @@ function CreateServerModal({ isOpen, onClose }) {
 
   const selectedEgg = Array.isArray(eggs) ? eggs.find(e => e.id === egg) : null;
   const selectedLocation = Array.isArray(locations) ? locations.find(l => l.id === location) : null;
-  const filteredNodes = Array.isArray(nodes) ? nodes.filter(n => n.locationId.toString() === selectedLocation?.id.toString()) : [];
+  const filteredNodes = Array.isArray(nodes)
+    ? nodes.filter((n) => n.locationId?.toString() === selectedLocation?.id?.toString())
+    : [];
 
   // Handle clicks outside dropdowns
   useEffect(() => {

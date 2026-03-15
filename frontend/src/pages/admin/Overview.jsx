@@ -70,6 +70,12 @@ function WelcomeModal({ isOpen, onClose }) {
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
       <DialogContent className="max-w-2xl bg-[#0a0a0a] border-neutral-800 p-8">
+        <DialogHeader className="sr-only">
+          <DialogTitle>{siteName} welcome</DialogTitle>
+          <DialogDescription>
+            Welcome to the latest version of {siteName}. Review the overview and choose whether to hide this welcome message in the future.
+          </DialogDescription>
+        </DialogHeader>
         <div className="py-4 flex flex-col items-center">
           <div className="relative space-y-6 flex flex-col items-center text-center w-full">
             <img src="https://i.imgur.com/7rsHr8H.png" alt="Heliactyl Next Logo" className="w-auto h-24 mb-4" />

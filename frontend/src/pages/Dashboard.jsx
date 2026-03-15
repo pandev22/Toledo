@@ -12,6 +12,7 @@ import {
 import { ChartPie, Users, Server, CircuitBoard, MapPin } from 'lucide-react';
 import { FAQSection } from '../components/FAQSection';
 import { Card, CardContent } from '@/components/ui/card';
+import { useSettings } from '@/hooks/useSettings';
 
 // Utility function to format bytes
 function formatBytes(bytes, decimals = 2) {
@@ -364,6 +365,7 @@ function LoadingSkeleton() {
 
 export default function Dashboard() {
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const { settings } = useSettings();
 
   const { data: resources, isLoading: loadingResources } = useQuery({
     queryKey: ['resources'],
@@ -377,10 +379,18 @@ export default function Dashboard() {
   const { data: activeBoosts } = useQuery({
     queryKey: ['active-boosts'],
     queryFn: async () => {
-      const { data } = await axios.get('/api/boosts/active');
-      return data;
+      try {
+        const { data } = await axios.get('/api/boosts/active');
+        return data;
+      } catch (error) {
+        if (error.response?.status === 403 && error.response?.data?.error === 'Server boosts are currently disabled') {
+          return null;
+        }
+        throw error;
+      }
     },
     // Don't block loading
+    enabled: settings?.features?.boosts !== false,
     retry: false,
     staleTime: 30000,
   });
