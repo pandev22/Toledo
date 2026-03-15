@@ -1,22 +1,23 @@
-import React, { useState } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
+import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
-import { Switch } from '@/components/ui/switch';
-import { ScrollArea } from '@/components/ui/scroll-area';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogFooter,
 } from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem, DropdownMenuTrigger
+} from "@/components/ui/dropdown-menu";
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { ScrollArea } from '@/components/ui/scroll-area';
 import {
   Select,
   SelectContent,
@@ -24,36 +25,30 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import { Alert, AlertDescription } from '@/components/ui/alert';
-import {
-  RefreshCw,
-  Egg,
-  Settings2,
-  MoreVertical,
-  Check,
-  X,
-  Download,
-  FolderOpen,
-  Plus,
-  Trash2,
-  Edit,
-  Search,
-  Filter,
-  AlertCircle,
-  Cpu,
-  HardDrive,
-  MemoryStick,
-  Layers
-} from 'lucide-react';
-import axios from 'axios';
+import { Switch } from '@/components/ui/switch';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useToast } from '@/hooks/use-toast';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import axios from 'axios';
+import {
+  AlertCircle,
+  Check,
+  Cpu,
+  Download,
+  Edit,
+  Egg,
+  Filter,
+  HardDrive,
+  Layers,
+  MemoryStick,
+  MoreVertical,
+  Plus,
+  RefreshCw,
+  Search,
+  X
+} from 'lucide-react';
+import React, { useState } from 'react';
 
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 export default function AdminEggs() {
@@ -66,6 +61,7 @@ export default function AdminEggs() {
   const [isCategoryDialogOpen, setIsCategoryDialogOpen] = useState(false);
   const [newCategory, setNewCategory] = useState({ id: '', name: '', icon: 'folder' });
   const [isSyncing, setIsSyncing] = useState(false);
+  const [pendingDisableEgg, setPendingDisableEgg] = useState(null);
 
   // Fetch eggs and categories
   const { data: eggsData, isLoading, error } = useQuery({
@@ -404,19 +400,19 @@ export default function AdminEggs() {
                     filteredEggs.map(([id, egg]) => (
                       <TableRow key={id}>
                         <TableCell>
+                          {/*
+                            Render Switch directly instead of wrapping in ConfirmDialog.
+                            Using onClick for disable (shows confirmation dialog) and onCheckedChange for enable (direct).
+                            This avoids Radix data-state collision between Switch and AlertDialogTrigger.
+                          */}
                           {egg.enabled ? (
-                            <ConfirmDialog
-                              title="Disable Egg?"
-                              description={`Are you sure you want to disable ${egg.displayName || egg.originalName}? Users will no longer be able to create servers with this egg.`}
-                              onConfirm={() => toggleMutation.mutate(id)}
-                              variant="destructive"
-                              trigger={
-                                <Switch
-                                  checked={egg.enabled}
-                                  onCheckedChange={() => {}}
-                                  disabled={toggleMutation.isLoading}
-                                />
-                              }
+                            <Switch
+                              checked={egg.enabled}
+                              onClick={(e) => {
+                                e.preventDefault();
+                                setPendingDisableEgg({ id, name: egg.displayName || egg.originalName });
+                              }}
+                              disabled={toggleMutation.isLoading}
                             />
                           ) : (
                             <Switch
@@ -774,6 +770,35 @@ export default function AdminEggs() {
               ) : (
                 'Create Category'
               )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Disable Egg Confirmation Dialog */}
+      <Dialog open={!!pendingDisableEgg} onOpenChange={(open) => !open && setPendingDisableEgg(null)}>
+        <DialogContent className="bg-[#0a0a0a] border-neutral-800">
+          <DialogHeader>
+            <DialogTitle className="text-white">Disable Egg?</DialogTitle>
+            <DialogDescription>
+              Are you sure you want to disable {pendingDisableEgg?.name}? Users will no longer be able to create servers with this egg.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPendingDisableEgg(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => {
+                if (pendingDisableEgg?.id) {
+                  toggleMutation.mutate(pendingDisableEgg.id);
+                }
+                setPendingDisableEgg(null);
+              }}
+              disabled={toggleMutation.isLoading}
+            >
+              {toggleMutation.isLoading ? 'Disabling...' : 'Disable'}
             </Button>
           </DialogFooter>
         </DialogContent>
