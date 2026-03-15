@@ -63,6 +63,18 @@ export default function AdminEggs() {
   const [isSyncing, setIsSyncing] = useState(false);
   const [pendingDisableEgg, setPendingDisableEgg] = useState(null);
 
+  const normalizeMaximumResources = (maximum) => {
+    if (!maximum || typeof maximum !== 'object') {
+      return null;
+    }
+
+    return {
+      ram: maximum.ram ?? null,
+      disk: maximum.disk ?? null,
+      cpu: maximum.cpu ?? null,
+    };
+  };
+
   // Fetch eggs and categories
   const { data: eggsData, isLoading, error } = useQuery({
     queryKey: ['admin-eggs'],
@@ -526,7 +538,7 @@ export default function AdminEggs() {
                   <TabsTrigger value="advanced">Advanced</TabsTrigger>
                 </TabsList>
 
-                <TabsContent value="general" className="space-y-4 mt-4">
+                <TabsContent value="general" className="mt-4 space-y-4 focus-visible:ring-0 focus-visible:ring-offset-0">
                   <div className="space-y-2">
                     <Label>Display Name</Label>
                     <Input
@@ -579,7 +591,7 @@ export default function AdminEggs() {
                   </div>
                 </TabsContent>
 
-                <TabsContent value="resources" className="space-y-4 mt-4">
+                <TabsContent value="resources" className="mt-4 space-y-4 focus-visible:ring-0 focus-visible:ring-offset-0">
                   <div className="grid grid-cols-3 gap-4">
                     <div className="space-y-2">
                       <Label>Minimum RAM (MB)</Label>
@@ -657,7 +669,7 @@ export default function AdminEggs() {
                   </div>
                 </TabsContent>
 
-                <TabsContent value="advanced" className="space-y-4 mt-4">
+                <TabsContent value="advanced" className="mt-4 space-y-4 focus-visible:ring-0 focus-visible:ring-offset-0">
                   <div className="space-y-2">
                     <Label>Docker Image</Label>
                     <Input
@@ -698,7 +710,12 @@ export default function AdminEggs() {
             <Button
               onClick={() => {
                 const { id, ...updates } = selectedEgg;
-                updateMutation.mutate({ eggId: id, updates });
+                const payload = {
+                  ...updates,
+                  maximum: normalizeMaximumResources(updates.maximum),
+                };
+
+                updateMutation.mutate({ eggId: id, updates: payload });
               }}
               disabled={updateMutation.isLoading}
             >
