@@ -339,8 +339,16 @@ export default function ConsolePage() {
   const { data: renewalStatus, error: renewalError, isLoading: isRenewalLoading } = useQuery({
     queryKey: ['server', id, 'renewal'],
     queryFn: async () => {
-      const { data } = await axios.get(`/api/server/${id}/renewal/status`);
-      return data;
+      try {
+        const { data } = await axios.get(`/api/server/${id}/renewal/status`);
+        return data;
+      } catch (error) {
+        if (error?.response?.status === 404) {
+          return null;
+        }
+
+        throw error;
+      }
     },
     refetchInterval: 30000,
     retry: 1,
@@ -396,6 +404,7 @@ export default function ConsolePage() {
       : renewalCanRenew
         ? { label: 'Renew now', className: 'bg-amber-500/15 text-amber-200 border-amber-500/30' }
         : { label: 'Active', className: 'bg-emerald-500/15 text-emerald-200 border-emerald-500/30' };
+  const showRenewalCard = isRenewalLoading || Boolean(renewalStatus) || Boolean(renewalError);
 
   const writeFile = async (path, content) => {
     try {
@@ -987,7 +996,7 @@ export default function ConsolePage() {
         </Card>
       </div>
 
-      <Card className="overflow-hidden border-neutral-800 bg-gradient-to-br from-[#111111] via-[#111111] to-[#171717]">
+      {showRenewalCard ? <Card className="overflow-hidden border-neutral-800 bg-gradient-to-br from-[#111111] via-[#111111] to-[#171717]">
         <CardHeader className="pb-4">
           <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
             <div className="space-y-1">
@@ -1059,7 +1068,7 @@ export default function ConsolePage() {
             </>
           ) : null}
         </CardContent>
-      </Card>
+      </Card> : null}
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <ResourceStat

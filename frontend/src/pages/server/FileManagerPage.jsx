@@ -478,6 +478,7 @@ const FileManagerPage = () => {
 
       const formData = new FormData();
       files.forEach(file => formData.append('files', file));
+      const totalUploadSize = files.reduce((total, file) => total + (file.size || 0), 0);
 
       const xhr = new XMLHttpRequest();
       xhr.open('POST', uploadUrl.toString());
@@ -496,13 +497,16 @@ const FileManagerPage = () => {
           setShowUploadDialog(false);
           setUploadProgress(0);
         } else {
-          handleError(new Error(`Upload failed with status: ${xhr.status}`));
+          const message = xhr.status === 413
+            ? `Upload rejected: ${formatBytes(totalUploadSize)} exceeds the server upload limit.`
+            : `Upload failed with status: ${xhr.status}`;
+          handleError(new Error(message));
           setShowUploadDialog(false);
         }
       };
 
       xhr.onerror = () => {
-        handleError(new Error('Upload failed'));
+        handleError(new Error(`Upload failed. The remote file server likely rejected ${formatBytes(totalUploadSize)} due to its upload size limit or missing CORS error response.`));
         setShowUploadDialog(false);
       };
 

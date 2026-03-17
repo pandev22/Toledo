@@ -195,7 +195,7 @@ function createRenewalRecord(serverAttributes, userId, config) {
   };
 }
 
-async function initializeServerRenewal(db, serverAttributes, userId = null) {
+async function initializeServerRenewal(db, serverAttributes, userId = null, options = {}) {
   if (!serverAttributes?.identifier) {
     return null;
   }
@@ -204,6 +204,10 @@ async function initializeServerRenewal(db, serverAttributes, userId = null) {
   const existing = await readRenewalRecord(db, serverAttributes.identifier);
 
   if (!existing) {
+    if (options.allowCreate === false) {
+      return null;
+    }
+
     const record = createRenewalRecord(serverAttributes, userId, config);
     return writeRenewalRecord(db, serverAttributes.identifier, record);
   }
@@ -272,22 +276,13 @@ async function getRenewalRecord(db, identifier, fallbackUserId = null) {
   let record = await readRenewalRecord(db, identifier);
 
   if (!record) {
-    if (fallbackUserId) {
-      record = await initializeServerRenewal(db, { identifier }, fallbackUserId);
-    } else {
-      const owner = await resolveOwnerFromPanel(db, identifier);
-      record = await initializeServerRenewal(db, { identifier, id: owner.panelId }, owner.userId);
-    }
-  }
-
-  if (!record) {
     return null;
   }
 
   return initializeServerRenewal(db, {
     identifier: record.serverIdentifier,
     id: record.panelId
-  }, record.userId);
+  }, fallbackUserId ?? record.userId, { allowCreate: false });
 }
 
 function getDeletionDate(record, config) {
@@ -394,35 +389,9 @@ async function fetchAllPanelServers() {
   return servers;
 }
 
-async function resolveOwnerFromPanel(db, identifier) {
-  const panelServers = await fetchAllPanelServers();
-  const matchingServer = panelServers.find((server) => server.attributes?.identifier === identifier);
-
-  if (!matchingServer?.attributes) {
-    return {
-      userId: null,
-      panelId: null
-    };
-  }
-
-  const owner = await db.user.findFirst({
-    where: {
-      pterodactylId: matchingServer.attributes.user
-    },
-    select: {
-      id: true
-    }
-  });
-
-  return {
-    userId: owner?.id ?? null,
-    panelId: matchingServer.attributes.id ?? null
-  };
-}
-
 async function syncRenewalRecords(db) {
   const panelServers = await fetchAllPanelServers();
-  const identifiers = new Set();
+  const panelServerMap = new Map();
   const pterodactylIds = [...new Set(
     panelServers
       .map((server) => server.attributes?.user)
@@ -451,20 +420,24 @@ async function syncRenewalRecords(db) {
       continue;
     }
 
-    identifiers.add(attributes.identifier);
-    const owner = userMap.get(attributes.user);
-
-    await initializeServerRenewal(db, attributes, owner?.id ?? null);
+    panelServerMap.set(attributes.identifier, attributes);
   }
 
   const rows = await readAllRenewalRows(db);
   for (const row of rows) {
     const record = parseRenewalRow(row);
-    if (!record?.serverIdentifier || identifiers.has(record.serverIdentifier)) {
+    if (!record?.serverIdentifier) {
       continue;
     }
 
-    await db.heliactyl.delete({ where: { key: row.key } }).catch(() => null);
+    const attributes = panelServerMap.get(record.serverIdentifier);
+    if (!attributes) {
+      await db.heliactyl.delete({ where: { key: row.key } }).catch(() => null);
+      continue;
+    }
+
+    const owner = userMap.get(attributes.user);
+    await initializeServerRenewal(db, attributes, owner?.id ?? null, { allowCreate: false });
   }
 }
 
@@ -512,7 +485,9 @@ async function handleExpiredRecord(db, record, config) {
   try {
     await stopServer(record.serverIdentifier);
   } catch (error) {
-    if (error.response?.status === 404) {
+    const status = error?.response?.status ?? null;
+
+    if (status === 404) {
       await removeServerRenewal(db, {
         identifier: record.serverIdentifier,
         panelId: record.panelId
@@ -520,7 +495,11 @@ async function handleExpiredRecord(db, record, config) {
       return;
     }
 
-    throw error;
+    if (status !== 409) {
+      throw error;
+    }
+
+    console.warn(`[Renewal] Server ${record.serverIdentifier} was already stopped or busy during expiration handling.`);
   }
 
   await writeRenewalRecord(db, record.serverIdentifier, {
@@ -565,7 +544,12 @@ async function runRenewalMaintenance() {
       const record = await initializeServerRenewal(maintenanceDb, {
         identifier: parsed.serverIdentifier,
         id: parsed.panelId
-      }, parsed.userId);
+      }, parsed.userId, { allowCreate: false });
+
+      if (!record) {
+        continue;
+      }
+
       await handleExpiredRecord(maintenanceDb, record, config);
 
       if (config.apiDelayMs > 0) {
