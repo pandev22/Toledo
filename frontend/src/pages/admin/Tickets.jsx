@@ -396,11 +396,11 @@ export default function AdminSupportDashboard() {
   };
 
   return (
-    <div className="space-y-6 p-6">
+    <div className="space-y-6 p-6 bg-[#1a1d21] min-h-screen">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
           <div>
-            <h1 className="text-2xl font-semibold">Support Tickets</h1>
+            <h1 className="text-2xl font-semibold text-white">Support Tickets</h1>
           </div>
         </div>
         <div className="flex items-center gap-4">
@@ -464,8 +464,8 @@ export default function AdminSupportDashboard() {
         </div>
 
         {/* Sort Controls */}
-        <div className="flex items-center gap-4 mt-4 pt-4 border-t">
-          <span className="text-sm text-gray-500">Sort by:</span>
+        <div className="flex items-center gap-4 mt-4 pt-4 border-t border-[#2e3337]">
+          <span className="text-sm text-gray-400">Sort by:</span>
           
           <Select
             value={filters.sortBy}
@@ -508,17 +508,17 @@ export default function AdminSupportDashboard() {
         <StatsCard
           title="Open Tickets"
           value={stats?.open || '-'}
-          className="text-emerald-600"
+          className="text-emerald-400"
         />
         <StatsCard
           title="Avg. Response Time"
           value={stats?.averageResponseTime ? `${Math.round(stats.averageResponseTime / 60000)}m` : '-'}
-          className="text-amber-600"
+          className="text-amber-400"
         />
         <StatsCard
           title="Last 7 Days"
           value={stats?.ticketsLastWeek || '-'}
-          className="text-blue-600"
+          className="text-blue-400"
         />
       </div>
 
@@ -526,27 +526,27 @@ export default function AdminSupportDashboard() {
         <div className="overflow-x-auto">
           <table className="w-full">
             <thead>
-              <tr className="border-b">
-                <th className="text-left p-4">Ticket</th>
-                <th className="text-left p-4">User</th>
-                <th className="text-left p-4">Category</th>
-                <th className="text-left p-4">Priority</th>
-                <th className="text-left p-4">Status</th>
-                <th className="text-center p-4">Actions</th>
+              <tr className="border-b border-[#2e3337]">
+                <th className="text-left p-4 text-gray-300">Ticket</th>
+                <th className="text-left p-4 text-gray-300">User</th>
+                <th className="text-left p-4 text-gray-300">Category</th>
+                <th className="text-left p-4 text-gray-300">Priority</th>
+                <th className="text-left p-4 text-gray-300">Status</th>
+                <th className="text-center p-4 text-gray-300">Actions</th>
               </tr>
             </thead>
             <tbody>
               {filteredTickets.map(ticket => (
-                <tr key={ticket.id} className="border-b">
+                <tr key={ticket.id} className="border-b border-[#2e3337]">
                   <td className="p-4">
                     <div>
-                      <div className="font-medium">{ticket.subject}</div>
-                      <div className="text-sm text-gray-500">#{ticket.id.slice(0, 8)}</div>
+                      <div className="font-medium text-white">{ticket.subject}</div>
+                      <div className="text-sm text-gray-400">#{ticket.id.slice(0, 8)}</div>
                     </div>
                   </td>
                   <td className="p-4">
-                    <div className="text-sm">{ticket.user.username}</div>
-                    <div className="text-xs text-gray-500">{ticket.user.email}</div>
+                    <div className="text-sm text-gray-200">{ticket.user.username}</div>
+                    <div className="text-xs text-gray-400">{ticket.user.email}</div>
                   </td>
                   <td className="p-4">
                     <Badge variant="outline" className="bg-[#202229] text-[#95a1ad] border-[#2e3337]/50">
