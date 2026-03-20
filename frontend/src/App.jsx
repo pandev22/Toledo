@@ -43,6 +43,7 @@ import AccountPage from './pages/Account';
 import PasskeyManager from './pages/Passkeys';
 
 import AdminOverview from './pages/admin/Overview';
+import AdminServers from './pages/admin/Servers';
 import AdminUsers from './pages/admin/Users';
 import AdminNodes from './pages/admin/Nodes';
 import AdminTickets from './pages/admin/Tickets';
@@ -316,6 +317,7 @@ export default function App() {
 
             {/* Admin routes */}
             <Route path="/admin/overview" element={<AdminOverview />} />
+            <Route path="/admin/servers" element={<AdminServers />} />
             <Route path="/admin/users" element={<AdminUsers />} />
             <Route path="/admin/nodes" element={<AdminNodes />} />
             <Route path="/admin/tickets" element={<AdminTickets />} />

@@ -687,7 +687,7 @@ module.exports.load = async function (app, db) {
       // Get servers with pagination
       const page = parseInt(req.query.page) || 1;
 
-      const serversResponse = await pteroApi.get(`/api/application/servers?page=${page}&per_page=10000`);
+      const serversResponse = await pteroApi.get(`/api/application/servers?page=${page}&per_page=10000&include=user,node`);
       res.json(serversResponse.data);
     } catch (error) {
       console.error("Error fetching servers:", error);
