@@ -205,12 +205,17 @@ module.exports.load = async function (app, db) {
   app.get('/auth/discord/callback', async (req, res) => {
     const { code, state } = req.query;
 
+    const redirectAuthError = (reason = 'discord_auth_failed') => {
+      const params = new URLSearchParams({ error: reason });
+      return res.redirect(`/auth?${params.toString()}`);
+    };
+
     if (!code) {
-      return res.status(400).json({ error: 'No authorization code provided' });
+      return redirectAuthError('discord_auth_failed');
     }
 
     if (state !== req.session.oauthState) {
-      return res.status(400).json({ error: 'Invalid state parameter' });
+      return redirectAuthError('discord_auth_failed');
     }
 
     // Get client IP
@@ -326,10 +331,8 @@ module.exports.load = async function (app, db) {
 
       res.redirect('/dashboard');
     } catch (error) {
-      res.status(500).json({
-        error: 'Authentication failed. Try using regular email and password authentication or join discord.gg/freehosting to get support.',
-        details: process.env.NODE_ENV === 'development' ? error.message : undefined
-      });
+      console.error('Discord authentication failed:', error);
+      return redirectAuthError('discord_auth_failed');
     }
   });
 

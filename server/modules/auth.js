@@ -479,29 +479,36 @@ module.exports.load = async function (app, db) {
       return res.status(401).json({ error: "Not logged in" });
     }
 
-    try {
-      // Add logout notification
-      const userId = req.session.userinfo.id;
-      await db.notification.create({
-        data: {
-          userId: userId,
-          action: "user:logout",
-          name: "Signed out"
-        }
-      });
+    const userId = req.session.userinfo.id;
 
-      // Destroy the session
-      req.session.destroy((err) => {
-        if (err) {
-          console.error('Session destruction error:', err);
-          return res.status(500).json({ error: "Failed to logout" });
+    try {
+      if (userId) {
+        const existingUser = await db.user.findUnique({
+          where: { id: userId },
+          select: { id: true }
+        });
+
+        if (existingUser) {
+          await db.notification.create({
+            data: {
+              userId,
+              action: "user:logout",
+              name: "Signed out"
+            }
+          });
         }
-        res.json({ message: "Logged out successfully" });
-      });
+      }
     } catch (error) {
-      console.error('Logout error:', error);
-      res.status(500).json({ error: "Failed to process logout" });
+      console.error('Logout notification error:', error);
     }
+
+    req.session.destroy((err) => {
+      if (err) {
+        console.error('Session destruction error:', err);
+        return res.status(500).json({ error: "Failed to logout" });
+      }
+      res.json({ message: "Logged out successfully" });
+    });
   });
 };
 

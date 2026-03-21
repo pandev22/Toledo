@@ -6,6 +6,7 @@ const path = require('path');
 const fs = require('fs').promises;
 const TOML = require('@iarna/toml');
 const log = require('../handlers/log.js');
+const cache = require('../handlers/cache.js');
 const loadConfig = require('../handlers/config.js');
 const settings = loadConfig('./config.toml');
 const { validate, schemas } = require('../handlers/validate');
@@ -16,6 +17,16 @@ const pteroApi = axios.create({
   headers: {
     'Content-Type': 'application/json',
     'Authorization': `Bearer ${settings.pterodactyl.key}`
+  }
+});
+
+const pteroClientApi = axios.create({
+  baseURL: settings.pterodactyl.domain,
+  timeout: 5000,
+  headers: {
+    'Content-Type': 'application/json',
+    'Accept': 'application/json',
+    'Authorization': `Bearer ${settings.pterodactyl.client_key}`
   }
 });
 
@@ -52,6 +63,52 @@ async function checkAdminStatus(req, res, settings, db) {
 }
 
 let checkAdmin = checkAdminStatus;
+
+async function getServerRuntimeStatus(serverIdentifier) {
+  if (!serverIdentifier || !settings.pterodactyl.client_key) {
+    return 'unknown';
+  }
+
+  return cache.getOrSet(
+    `admin:server-status:${serverIdentifier}`,
+    async () => {
+      try {
+        const response = await pteroClientApi.get(`/api/client/servers/${serverIdentifier}/resources`);
+        return response.data?.attributes?.current_state || 'unknown';
+      } catch (error) {
+        return 'unknown';
+      }
+    },
+    30
+  );
+}
+
+async function enrichServersWithRuntimeStatus(servers) {
+  const concurrency = 10;
+  const enrichedServers = [];
+
+  for (let index = 0; index < servers.length; index += concurrency) {
+    const batch = servers.slice(index, index + concurrency);
+    const enrichedBatch = await Promise.all(
+      batch.map(async (server) => {
+        const runtimeStatus = await getServerRuntimeStatus(server.attributes?.identifier);
+
+        return {
+          ...server,
+          attributes: {
+            ...server.attributes,
+            runtimeStatus,
+            isOnline: runtimeStatus === 'running'
+          }
+        };
+      })
+    );
+
+    enrichedServers.push(...enrichedBatch);
+  }
+
+  return enrichedServers;
+}
 
 const HeliactylModule = {
   "name": "Admin",
@@ -688,7 +745,13 @@ module.exports.load = async function (app, db) {
       const page = parseInt(req.query.page) || 1;
 
       const serversResponse = await pteroApi.get(`/api/application/servers?page=${page}&per_page=10000&include=user,node`);
-      res.json(serversResponse.data);
+      const servers = serversResponse.data?.data || [];
+      const serversWithRuntimeStatus = await enrichServersWithRuntimeStatus(servers);
+
+      res.json({
+        ...serversResponse.data,
+        data: serversWithRuntimeStatus
+      });
     } catch (error) {
       console.error("Error fetching servers:", error);
       res.status(500).json({ error: "Internal server error" });

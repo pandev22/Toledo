@@ -7,13 +7,62 @@ import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
+import { useSettings } from '@/hooks/useSettings';
 import {
   HoverCard,
   HoverCardContent,
   HoverCardTrigger,
 } from "@/components/ui/hover-card";
-import { ArrowUpDown, Server, ShieldCheck, Box, Shield } from 'lucide-react';
+import { ArrowUpDown, ExternalLink, Loader2, Server, ShieldCheck, Box, Shield } from 'lucide-react';
 import axios from 'axios';
+
+function getServerStatus(server) {
+  if (server.attributes.suspended) {
+    return {
+      label: 'Suspended',
+      variant: 'destructive',
+      sortValue: '0-suspended'
+    };
+  }
+
+  if (server.attributes.runtimeStatus === 'starting') {
+    return {
+      label: 'Starting',
+      variant: 'secondary',
+      sortValue: '1-starting'
+    };
+  }
+
+  if (server.attributes.runtimeStatus === 'stopping') {
+    return {
+      label: 'Stopping',
+      variant: 'secondary',
+      sortValue: '3-stopping'
+    };
+  }
+
+  if (server.attributes.isOnline) {
+    return {
+      label: 'Online',
+      variant: 'success',
+      sortValue: '2-online'
+    };
+  }
+
+  if (server.attributes.runtimeStatus === 'unknown') {
+    return {
+      label: 'Unknown',
+      variant: 'secondary',
+      sortValue: '5-unknown'
+    };
+  }
+
+  return {
+    label: 'Offline',
+    variant: 'secondary',
+    sortValue: '4-offline'
+  };
+}
 
 export default function AdminServersPage() {
   const [search, setSearch] = useState('');
@@ -21,6 +70,7 @@ export default function AdminServersPage() {
   const [currentPage, setCurrentPage] = useState(1);
   const [sortField, setSortField] = useState('name');
   const [sortDirection, setSortDirection] = useState('asc');
+  const { settings: publicSettings } = useSettings();
 
   // Fetch servers list via admin endpoint
   const { data: serversData, isLoading } = useQuery({
@@ -93,6 +143,10 @@ export default function AdminServersPage() {
           aValue = (a.attributes.relationships?.node?.attributes?.name || '').toLowerCase();
           bValue = (b.attributes.relationships?.node?.attributes?.name || '').toLowerCase();
           break;
+        case 'status':
+          aValue = getServerStatus(a).sortValue;
+          bValue = getServerStatus(b).sortValue;
+          break;
         default:
           break;
       }
@@ -109,6 +163,23 @@ export default function AdminServersPage() {
   );
 
   const totalPages = Math.ceil(filteredAndSortedServers.length / parseInt(perPage));
+  const skeletonRows = Array.from({ length: parseInt(perPage) || 5 }, (_, index) => index + 1);
+
+  const handleRowClick = (server) => {
+    const panelDomain = publicSettings?.pterodactyl;
+    const serverIdentifier = server.attributes?.identifier;
+
+    if (!panelDomain || !serverIdentifier) {
+      return;
+    }
+
+    window.open(`${panelDomain}/server/${serverIdentifier}`, '_blank', 'noopener,noreferrer');
+  };
+
+  const handlePanelIconClick = (event, server) => {
+    event.stopPropagation();
+    handleRowClick(server);
+  };
 
   return (
     <div className="p-6">
@@ -148,6 +219,14 @@ export default function AdminServersPage() {
           </div>
         </CardHeader>
         <CardContent className="overflow-x-auto">
+          {isLoading && (
+            <div className="mb-4 flex items-start gap-3 rounded-lg border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
+              <Loader2 className="mt-0.5 h-4 w-4 animate-spin text-amber-300" />
+              <p>
+                The first load can take a little while. Please wait while we fetch the servers and their status.
+              </p>
+            </div>
+          )}
           <div className="min-w-[800px]">
             <Table>
               <TableHeader>
@@ -172,13 +251,17 @@ export default function AdminServersPage() {
                       Node <ArrowUpDown className="ml-2 h-4 w-4" />
                     </div>
                   </TableHead>
-                  <TableHead>Status</TableHead>
+                  <TableHead className="cursor-pointer" onClick={() => handleSort('status')}>
+                    <div className="flex items-center">
+                      Status <ArrowUpDown className="ml-2 h-4 w-4" />
+                    </div>
+                  </TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {isLoading ? (
-                  [...Array(parseInt(perPage) || 5)].map((_, i) => (
-                    <TableRow key={i}>
+                  skeletonRows.map((rowNumber) => (
+                    <TableRow key={`skeleton-${rowNumber}`}>
                       <TableCell><Skeleton className="h-6 w-8" /></TableCell>
                       <TableCell>
                         <Skeleton className="h-5 w-48 mb-2" />
@@ -196,54 +279,73 @@ export default function AdminServersPage() {
                     </TableCell>
                   </TableRow>
                 ) : (
-                  paginatedServers.map(server => (
-                    <TableRow key={server.attributes.id}>
-                      <TableCell className="font-medium text-neutral-400">
-                        #{server.attributes.id}
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex flex-col">
-                          <span className="font-semibold text-white">{server.attributes.name}</span>
-                          <span className="text-xs text-neutral-500 font-mono mt-1">
-                            {server.attributes.uuid}
-                          </span>
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex items-center gap-2">
-                          <span className="font-medium">
-                            {server.attributes.relationships?.user?.attributes?.username || 'Unknown'}
-                          </span>
-                          {server.attributes.relationships?.user?.attributes?.root_admin && (
-                            <HoverCard>
-                              <HoverCardTrigger>
-                                <Badge variant="default" className="bg-red-500 scale-90">
-                                  Admin
-                                </Badge>
-                              </HoverCardTrigger>
-                              <HoverCardContent>
-                                <div className="flex items-center gap-2">
-                                  <Shield className="w-4 h-4 text-red-500" />
-                                  <span className="text-sm">Administrator account with full access</span>
-                                </div>
-                              </HoverCardContent>
-                            </HoverCard>
-                          )}
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex items-center gap-2 text-neutral-300">
-                          <Server className="w-4 h-4 text-neutral-500" />
-                          {server.attributes.relationships?.node?.attributes?.name || 'Unknown Node'}
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <Badge variant={server.attributes.suspended ? "destructive" : "success"}>
-                          {server.attributes.suspended ? 'Suspended' : 'Active'}
-                        </Badge>
-                      </TableCell>
-                    </TableRow>
-                  ))
+                  paginatedServers.map(server => {
+                    const status = getServerStatus(server);
+
+                    return (
+                      <TableRow
+                        key={server.attributes.id}
+                        className="cursor-pointer transition-colors hover:bg-white/5"
+                        onClick={() => handleRowClick(server)}
+                      >
+                        <TableCell className="font-medium text-neutral-400">
+                          #{server.attributes.id}
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="flex flex-col">
+                              <span className="font-semibold text-white">{server.attributes.name}</span>
+                              <span className="text-xs text-neutral-500 font-mono mt-1">
+                                {server.attributes.uuid}
+                              </span>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={(event) => handlePanelIconClick(event, server)}
+                              className="mt-0.5 inline-flex h-8 w-8 items-center justify-center rounded-md border border-white/10 text-neutral-400 transition-colors hover:border-white/20 hover:bg-white/5 hover:text-white"
+                              aria-label={`Open ${server.attributes.name} in Pterodactyl`}
+                              title="Open in Pterodactyl"
+                            >
+                              <ExternalLink className="h-4 w-4" />
+                            </button>
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-2">
+                            <span className="font-medium">
+                              {server.attributes.relationships?.user?.attributes?.username || 'Unknown'}
+                            </span>
+                            {server.attributes.relationships?.user?.attributes?.root_admin && (
+                              <HoverCard>
+                                <HoverCardTrigger>
+                                  <Badge variant="default" className="bg-red-500 scale-90">
+                                    Admin
+                                  </Badge>
+                                </HoverCardTrigger>
+                                <HoverCardContent>
+                                  <div className="flex items-center gap-2">
+                                    <Shield className="w-4 h-4 text-red-500" />
+                                    <span className="text-sm">Administrator account with full access</span>
+                                  </div>
+                                </HoverCardContent>
+                              </HoverCard>
+                            )}
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-2 text-neutral-300">
+                            <Server className="w-4 h-4 text-neutral-500" />
+                            {server.attributes.relationships?.node?.attributes?.name || 'Unknown Node'}
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant={status.variant}>
+                            {status.label}
+                          </Badge>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })
                 )}
               </TableBody>
             </Table>
