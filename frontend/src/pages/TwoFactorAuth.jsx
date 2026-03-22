@@ -7,6 +7,7 @@ const TwoFactorAuth = () => {
   const [isSettingUp, setIsSettingUp] = useState(false);
   const [setupData, setSetupData] = useState(null);
   const [verificationCode, setVerificationCode] = useState('');
+  const [currentPassword, setCurrentPassword] = useState('');
   const [backupCodes, setBackupCodes] = useState([]);
   const [showBackupCodes, setShowBackupCodes] = useState(false);
   const [message, setMessage] = useState(null);
@@ -81,20 +82,33 @@ const TwoFactorAuth = () => {
   };
 
   const disable2FA = async () => {
+    if (!currentPassword) {
+      setMessage({ type: 'error', text: 'Please enter your current password to disable 2FA' });
+      return;
+    }
+
     try {
       const response = await fetch('/api/2fa/disable', {
         method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          currentPassword,
+        }),
       });
 
       if (response.ok) {
         setIsEnabled(false);
         setIsSettingUp(false);
         setSetupData(null);
+        setCurrentPassword('');
         setBackupCodes([]);
         setShowBackupCodes(false);
         setMessage({ type: 'success', text: '2FA has been disabled' });
       } else {
-        throw new Error('Failed to disable 2FA');
+        const error = await response.json();
+        throw new Error(error.error || 'Failed to disable 2FA');
       }
     } catch (error) {
       setMessage({ type: 'error', text: error.message || 'Failed to disable 2FA' });
@@ -137,6 +151,7 @@ const TwoFactorAuth = () => {
               Two-factor authentication adds an additional layer of security to your account by requiring a code from your phone in addition to your password.
             </p>
             <button
+              type="button"
               onClick={startSetup}
               className="px-4 py-2 bg-white text-black hover:bg-white/90 rounded-md font-medium text-sm transition active:scale-95 self-start"
             >
@@ -175,6 +190,7 @@ const TwoFactorAuth = () => {
                       className="flex-1 px-3 py-2 bg-[#394047] border border-white/5 rounded-md text-sm font-mono focus:outline-none"
                     />
                     <button
+                      type="button"
                       onClick={() => copyToClipboard(setupData.secret)}
                       className="p-2 rounded-md border border-white/5 text-[#95a1ad] hover:text-white hover:bg-white/5 transition active:scale-95"
                     >
@@ -197,12 +213,14 @@ const TwoFactorAuth = () => {
 
                 <div className="flex gap-3">
                   <button
+                    type="button"
                     onClick={verifyAndEnable}
                     className="px-4 py-2 bg-white text-black hover:bg-white/90 rounded-md font-medium text-sm transition active:scale-95"
                   >
                     Verify and Enable
                   </button>
                   <button
+                    type="button"
                     onClick={() => {
                       setIsSettingUp(false);
                       setSetupData(null);
@@ -230,7 +248,7 @@ const TwoFactorAuth = () => {
               <div className="bg-[#202229] border border-[#2e3337] rounded-lg p-4 mb-3">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
                   {backupCodes.map((code, index) => (
-                    <div key={index} className="font-mono text-sm">
+                    <div key={code || `backup-code-${index + 1}`} className="font-mono text-sm">
                       {code}
                     </div>
                   ))}
@@ -238,6 +256,7 @@ const TwoFactorAuth = () => {
               </div>
 
               <button
+                type="button"
                 onClick={copyBackupCodes}
                 className="px-4 py-2 bg-[#394047] text-white hover:bg-[#394047]/70 rounded-md font-medium text-sm transition active:scale-95 flex items-center gap-2"
               >
@@ -248,6 +267,7 @@ const TwoFactorAuth = () => {
 
             <div className="border-t border-[#2e3337] pt-4 mt-4">
               <button
+                type="button"
                 onClick={() => {
                   setShowBackupCodes(false);
                   setIsSettingUp(false);
@@ -268,7 +288,18 @@ const TwoFactorAuth = () => {
             </div>
 
             <div className="pt-2">
+              <div className="mb-3 max-w-md">
+                <p className="text-sm text-[#95a1ad] mb-1">Current password</p>
+                <input
+                  type="password"
+                  value={currentPassword}
+                  onChange={(e) => setCurrentPassword(e.target.value)}
+                  placeholder="Enter your current password"
+                  className="w-full px-3 py-2 bg-[#394047] border border-white/5 rounded-md text-sm focus:outline-none"
+                />
+              </div>
               <button
+                type="button"
                 onClick={disable2FA}
                 className="px-4 py-2 bg-red-500/10 text-red-500 border border-red-500/20 hover:bg-red-500/20 rounded-md font-medium text-sm transition active:scale-95"
               >

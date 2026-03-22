@@ -21,6 +21,7 @@ const API_LEVEL = 4;
 const settings = loadConfig("./config.toml");
 const logger = createLogger();
 const app = express();
+app.set('trust proxy', 1);
 const wsInstance = require("express-ws")(app);
 
 wsInstance.getWss().on("connection", logger.wsRequestLogger.bind(logger));

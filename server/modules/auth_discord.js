@@ -1,5 +1,6 @@
 const vpnCheck = require("../handlers/vpnCheck.js");
 const crypto = require('crypto');
+const bcrypt = require('bcrypt');
 const axios = require('axios');
 const { Client, GatewayIntentBits, Partials } = require('discord.js');
 const loadConfig = require("../handlers/config.js");
@@ -84,12 +85,12 @@ async function createPterodactylAccount(userId, username, email, retryCount = 0)
 
     // If ends with non-alphanumeric, append random number
     if (!cleaned.match(/[a-zA-Z0-9]$/)) {
-      cleaned = cleaned + Math.floor(Math.random() * 9 + 1);
+      cleaned = cleaned + crypto.randomInt(1, 10);
     }
 
     // Ensure we have at least one character
     if (cleaned.length === 0) {
-      cleaned = 'user' + Math.floor(Math.random() * 1000);
+      cleaned = 'user' + crypto.randomInt(100, 1000);
     }
 
     return cleaned;
@@ -269,12 +270,14 @@ module.exports.load = async function (app, db) {
       }
 
       if (isNewUser) {
+        const localPasswordHash = await bcrypt.hash(generatePassword(32), 12);
+
         user = await db.user.create({
           data: {
             discordId: userData.id,
             username: userData.username,
             email: userData.email,
-            password: "oauth",
+            password: localPasswordHash,
             pterodactylId: pteroId,
             discordAccessToken: tokenData.access_token,
             discordRefreshToken: tokenData.refresh_token,

@@ -1,4 +1,5 @@
 const crypto = require('crypto');
+const bcrypt = require('bcrypt');
 const speakeasy = require('speakeasy');
 const qrcode = require('qrcode');
 const axios = require('axios');
@@ -53,11 +54,13 @@ const pteroApi = axios.create({
 
 // Generate backup codes
 function generateBackupCodes(count = 8) {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+  const randomCodePart = () => Array.from(crypto.randomBytes(4), (byte) => chars[byte % chars.length]).join('');
   const codes = [];
   for (let i = 0; i < count; i++) {
     // Format: xxxx-xxxx (where x is alphanumeric)
-    const part1 = Math.random().toString(36).substring(2, 6).toUpperCase();
-    const part2 = Math.random().toString(36).substring(2, 6).toUpperCase();
+    const part1 = randomCodePart();
+    const part2 = randomCodePart();
     codes.push(`${part1}-${part2}`);
   }
   return codes;
@@ -180,19 +183,24 @@ module.exports.load = async function (app, db) {
   });
 
   // Disable 2FA
-  app.post('/api/2fa/disable', isAuthenticated, async (req, res) => {
-    // Note: No body validation required as this endpoint doesn't use any body parameters
+  app.post('/api/2fa/disable', isAuthenticated, validate(schemas.twoFactorDisable), async (req, res) => {
     try {
       const userId = req.session.userinfo.id;
+      const { currentPassword } = req.body;
 
       // Check if 2FA is enabled
       const user = await db.user.findUnique({
         where: { id: userId },
-        select: { twoFactorEnabled: true }
+        select: { twoFactorEnabled: true, password: true }
       });
 
       if (!user || !user.twoFactorEnabled) {
         return res.status(400).json({ error: 'Two-factor authentication is not enabled' });
+      }
+
+      const passwordMatch = await bcrypt.compare(currentPassword, user.password);
+      if (!passwordMatch) {
+        return res.status(401).json({ error: 'Current password is incorrect' });
       }
 
       // Disable 2FA

@@ -4,6 +4,14 @@ const loadConfig = require("../handlers/config.js");
 const settings = loadConfig("./config.toml");
 const axios = require("axios");
 const { validate, schemas } = require('../handlers/validate');
+const {
+  loginRateLimit,
+  registerRateLimit,
+  resetRequestRateLimit,
+  resetConsumeRateLimit,
+  magicLinkRateLimit,
+  magicLoginRateLimit
+} = require('../handlers/rateLimit');
 
 const RESEND_API_KEY = settings.api.client.resend.api_key;
 
@@ -75,21 +83,6 @@ async function createPterodactylAccount(username, email) {
 
 module.exports.HeliactylModule = HeliactylModule;
 module.exports.load = async function (app, db) {
-  const rateLimit = (req, res, next) => {
-    if (!req.session.lastAuthAttempt) {
-      req.session.lastAuthAttempt = Date.now();
-      return next();
-    }
-
-    const timeElapsed = Date.now() - req.session.lastAuthAttempt;
-    if (timeElapsed < 1000) {
-      return res.status(429).json({ error: "Too many requests. Please try again in " + (1000 - timeElapsed) + " ms." });
-    }
-
-    req.session.lastAuthAttempt = Date.now();
-    next();
-  };
-
   const sendEmail = async (to, subject, html) => {
     const response = await axios.post('https://api.resend.com/emails', {
       from: settings.api.client.resend.from,
@@ -145,7 +138,7 @@ module.exports.load = async function (app, db) {
   });
 
   // Registration route
-  app.post("/auth/register", rateLimit, validate(schemas.authRegister), async (req, res) => {
+  app.post("/auth/register", registerRateLimit, validate(schemas.authRegister), async (req, res) => {
     const { username, email, password } = req.body;
 
     // Check if email is already in use
@@ -214,7 +207,7 @@ module.exports.load = async function (app, db) {
     res.status(201).json({ message: "User registered successfully" });
   });
 
-  app.post("/auth/login", rateLimit, validate(schemas.authLogin), async (req, res) => {
+  app.post("/auth/login", loginRateLimit, validate(schemas.authLogin), async (req, res) => {
     const { email, password, remember } = req.body;
 
     const user = await db.user.findUnique({ where: { email } });
@@ -303,7 +296,7 @@ module.exports.load = async function (app, db) {
   });
 
   // Password reset request route
-  app.post("/auth/reset-password-request", validate(schemas.authResetRequest), async (req, res) => {
+  app.post("/auth/reset-password-request", resetRequestRateLimit, validate(schemas.authResetRequest), async (req, res) => {
     const { email } = req.body;
 
     const user = await db.user.findUnique({ where: { email } });
@@ -340,12 +333,12 @@ module.exports.load = async function (app, db) {
   });
 
   // Password reset route
-  app.post("/auth/reset-password", validate(schemas.authResetPassword), async (req, res) => {
+  app.post("/auth/reset-password", resetConsumeRateLimit, validate(schemas.authResetPassword), async (req, res) => {
     const { token, password } = req.body;
     const newPassword = password;
 
     const resetInfo = await db.authToken.findUnique({ where: { token } });
-    if (!resetInfo || resetInfo.type !== 'reset' || resetInfo.expiresAt < new Date()) {
+    if (!resetInfo || resetInfo.type !== 'reset' || resetInfo.usedAt || resetInfo.expiresAt < new Date()) {
       return res.status(400).json({ error: "Invalid or expired token" });
     }
 
@@ -359,20 +352,31 @@ module.exports.load = async function (app, db) {
     const saltRounds = 12;
     const hashedPassword = await bcrypt.hash(newPassword, saltRounds);
 
+    const consumeResult = await db.authToken.updateMany({
+      where: {
+        token,
+        usedAt: null,
+        type: 'reset',
+        expiresAt: { gt: new Date() }
+      },
+      data: { usedAt: new Date() }
+    });
+
+    if (consumeResult.count !== 1) {
+      return res.status(400).json({ error: "Invalid or expired token" });
+    }
+
     // Update user's password
     await db.user.update({
       where: { id: resetInfo.userId },
       data: { password: hashedPassword }
     });
 
-    // Delete the used reset token
-    await db.authToken.delete({ where: { token } });
-
     res.json({ message: "Password reset successful" });
   });
 
   // Magic link login request
-  app.post("/auth/magic-link", rateLimit, validate(schemas.authMagicLink), async (req, res) => {
+  app.post("/auth/magic-link", magicLinkRateLimit, validate(schemas.authMagicLink), async (req, res) => {
     const { email } = req.body;
 
     const user = await db.user.findUnique({ where: { email } });
@@ -409,7 +413,7 @@ module.exports.load = async function (app, db) {
   });
 
   // Magic link login verification
-  app.get("/auth/magic-login", async (req, res) => {
+  app.get("/auth/magic-login", magicLoginRateLimit, async (req, res) => {
     const { token } = req.query;
 
     if (!token) {
@@ -417,7 +421,21 @@ module.exports.load = async function (app, db) {
     }
 
     const magicInfo = await db.authToken.findUnique({ where: { token } });
-    if (!magicInfo || magicInfo.type !== 'magic' || magicInfo.expiresAt < new Date()) {
+    if (!magicInfo || magicInfo.type !== 'magic' || magicInfo.usedAt || magicInfo.expiresAt < new Date()) {
+      return res.status(400).json({ error: "Invalid or expired token" });
+    }
+
+    const consumeResult = await db.authToken.updateMany({
+      where: {
+        token,
+        usedAt: null,
+        type: 'magic',
+        expiresAt: { gt: new Date() }
+      },
+      data: { usedAt: new Date() }
+    });
+
+    if (consumeResult.count !== 1) {
       return res.status(400).json({ error: "Invalid or expired token" });
     }
 
@@ -457,9 +475,6 @@ module.exports.load = async function (app, db) {
 
     let cacheaccountinfo = cacheaccount.data;
     req.session.pterodactyl = cacheaccountinfo.attributes;
-
-    // Delete the used magic token
-    await db.authToken.delete({ where: { token } });
 
     // Auth notification
     await db.notification.create({
@@ -510,14 +525,30 @@ module.exports.load = async function (app, db) {
       res.json({ message: "Logged out successfully" });
     });
   });
+
+  const authTokenCleanup = setInterval(async () => {
+    try {
+      await db.authToken.deleteMany({
+        where: {
+          OR: [
+            { expiresAt: { lt: new Date() } },
+            { usedAt: { not: null } }
+          ]
+        }
+      });
+    } catch (error) {
+      console.error('Auth token cleanup error:', error);
+    }
+  }, 15 * 60 * 1000);
+
+  authTokenCleanup.unref?.();
 };
 
 function makeid(length) {
   let result = "";
   let characters = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-  let charactersLength = characters.length;
   for (let i = 0; i < length; i++) {
-    result += characters.charAt(Math.floor(Math.random() * charactersLength));
+    result += characters.charAt(crypto.randomInt(0, characters.length));
   }
   return result;
 }

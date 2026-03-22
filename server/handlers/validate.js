@@ -385,6 +385,10 @@ const schemas = {
     })
   }),
 
+  twoFactorDisable: z.object({
+    currentPassword: z.string({ required_error: 'Current password is required' }).min(1, 'Current password is required')
+  }),
+
   // Password change (with current password)
   passwordChange: z.object({
     currentPassword: z.string({ required_error: 'Current password is required' }).min(1),
@@ -499,9 +503,9 @@ const schemas = {
 
   // 2FA verification
   twoFactorVerify: z.object({
-    token: z.string({ required_error: 'Token is required' })
-      .length(6, 'Token must be exactly 6 digits')
-      .regex(/^\d+$/, 'Token must contain only digits'),
+    code: z.string({ required_error: 'Code is required' })
+      .length(6, 'Code must be exactly 6 digits')
+      .regex(/^\d+$/, 'Code must contain only digits'),
     secret: z.string({ required_error: 'Secret is required' }).min(1, 'Secret cannot be empty')
   }),
 
