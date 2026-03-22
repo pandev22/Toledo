@@ -12,9 +12,8 @@ datasource db {
 // Remove after migration script has run.
 // ──────────────────────────────────────────────
 model heliactyl {
-  key        String @id
-  value      String
-  created_at Int?   @default(dbgenerated("(strftime('%s', 'now'))"))
+  key   String @id
+  value String
 }
 
 model keyv {
