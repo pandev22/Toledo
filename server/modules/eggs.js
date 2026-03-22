@@ -300,6 +300,7 @@ module.exports.load = async function (app, db) {
           for (const egg of eggs) {
             const eggId = `${nestId}_${egg.attributes.id}`;
             const existingEgg = existingEggs[eggId];
+            const normalizedDescription = (egg.attributes.description || '').slice(0, 1000);
 
             // Build environment from variables
             const environment = {};
@@ -326,7 +327,7 @@ module.exports.load = async function (app, db) {
               pterodactylEggId: egg.attributes.id,
               nestName: nestName,
               originalName: egg.attributes.name,
-              description: egg.attributes.description,
+              description: normalizedDescription,
               dockerImage: egg.attributes.docker_image,
               startup: egg.attributes.startup,
               environment: environment,
