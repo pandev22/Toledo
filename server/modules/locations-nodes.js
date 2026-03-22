@@ -169,17 +169,22 @@ async function syncLocationsAndNodes(db) {
   const existingNodeMap = new Map(existingNodes.map((node) => [node.id, node]));
   const syncedAt = new Date();
 
+  const locationIdsWithNodes = new Set(
+    nodesResponse.data.data.map((node) => String(node.attributes.location_id))
+  );
+
   const locationRows = locationsResponse.data.data.map((location, index) => {
     const locationId = String(location.attributes.id);
     const defaults = getLocationDefaults(locationId);
     const existing = existingLocationMap.get(locationId);
+    const hasNodes = locationIdsWithNodes.has(locationId);
 
     return {
       id: locationId,
       pterodactylLocationId: location.attributes.id,
       name: existing?.name || location.attributes.long || location.attributes.short || defaults.name,
       description: existing?.description || location.attributes.long || defaults.description,
-      enabled: existing?.enabled ?? true,
+      enabled: existing?.enabled ?? hasNodes,
       packages: existing?.packages || JSON.stringify(defaults.packages),
       full: existing?.full ?? defaults.full,
       flags: existing?.flags || JSON.stringify(defaults.flags),

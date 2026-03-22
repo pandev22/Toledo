@@ -48,6 +48,30 @@ export default function AdminNodes() {
   const [selectedNode, setSelectedNode] = useState(null);
   const [isNodeDetailsOpen, setIsNodeDetailsOpen] = useState(false);
 
+  const formatResourceValue = (value) => {
+    const numericValue = Number(value || 0);
+
+    if (numericValue >= 1024) {
+      return `${(numericValue / 1024).toFixed(numericValue % 1024 === 0 ? 0 : 1)} GB`;
+    }
+
+    return `${numericValue} MB`;
+  };
+
+  const getUsageStats = (total, allocated) => {
+    const safeTotal = Number(total || 0);
+    const safeAllocated = Number(allocated || 0);
+    const free = Math.max(safeTotal - safeAllocated, 0);
+    const percentage = safeTotal > 0 ? Math.min((safeAllocated / safeTotal) * 100, 100) : 0;
+
+    return {
+      total: safeTotal,
+      allocated: safeAllocated,
+      free,
+      percentage,
+    };
+  };
+
   // Fetch locations and nodes data
   const { data: locationsNodesData, isLoading, error } = useQuery({
     queryKey: ['admin-locations-nodes'],
@@ -174,6 +198,16 @@ export default function AdminNodes() {
       [locationId]: !prev[locationId]
     }));
   };
+
+  const selectedNodeMemory = getUsageStats(
+    selectedNode?.memory,
+    selectedNode?.allocated_resources?.memory
+  );
+
+  const selectedNodeDisk = getUsageStats(
+    selectedNode?.disk,
+    selectedNode?.allocated_resources?.disk
+  );
 
   // Loading state
   if (isLoading) {
@@ -449,7 +483,7 @@ export default function AdminNodes() {
                         <Table>
                           <TableHeader>
                             <TableRow className="border-neutral-800 hover:bg-transparent">
-                              <TableHead className="text-neutral-500">Status</TableHead>
+                              <TableHead className="text-neutral-500 text-center">Status</TableHead>
                               <TableHead className="text-neutral-500">Node</TableHead>
                               <TableHead className="text-neutral-500">FQDN</TableHead>
                               <TableHead className="text-neutral-500">Resources</TableHead>
@@ -459,8 +493,8 @@ export default function AdminNodes() {
                           <TableBody>
                             {location.nodes.map((node) => (
                               <TableRow key={node.id} className="border-neutral-800/50 hover:bg-white/5">
-                                <TableCell>
-                                  <div className={`w-2 h-2 rounded-full ${
+                                <TableCell className="align-middle">
+                                  <div className={`w-2 h-2 rounded-full mx-auto ${
                                     node.enabled ? 'bg-green-500' : 'bg-red-500'
                                   }`} />
                                 </TableCell>
@@ -636,8 +670,8 @@ export default function AdminNodes() {
 
       {/* Node Details Dialog */}
       <Dialog open={isNodeDetailsOpen} onOpenChange={setIsNodeDetailsOpen}>
-        <DialogContent className="max-w-2xl bg-[#0a0a0a] border-neutral-800">
-          <DialogHeader>
+        <DialogContent className="w-[min(98vw,1280px)] max-w-[1280px] bg-[#0a0a0a] border-neutral-800 max-h-[90vh] overflow-y-auto">
+          <DialogHeader className="sr-only">
             <DialogTitle className="text-white flex items-center gap-2">
               <Server className="w-5 h-5" />
               {selectedNode?.name}
@@ -648,61 +682,196 @@ export default function AdminNodes() {
           </DialogHeader>
 
           {selectedNode && (
-            <div className="space-y-6">
-              {/* Basic Info */}
+            <div className="space-y-5">
+              {/* Header row - visible title for non-screen-reader users */}
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2 min-w-0">
+                  <Server className="w-5 h-5 text-neutral-400 shrink-0" />
+                  <h2 className="text-lg font-semibold text-white truncate">{selectedNode.name}</h2>
+                </div>
+                <Badge
+                  variant="outline"
+                        className="shrink-0 border-neutral-700 text-neutral-200"
+                >
+                  {selectedNode.enabled ? 'Enabled' : 'Disabled'}
+                </Badge>
+              </div>
+
+              {/* Top section: Overview + Availability */}
+              <div className="grid gap-4">
+                <Card className="bg-[#111111] border-neutral-800">
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-sm font-semibold">Overview</CardTitle>
+                    <CardDescription className="text-xs">
+                      Quick state and identification for this node.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    <div className="rounded-xl border border-neutral-800 bg-[#0d0d0d] p-3 min-w-0">
+                      <p className="text-sm font-medium text-white truncate">{selectedNode.fqdn}</p>
+                    </div>
+
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <div className="rounded-xl border border-neutral-800 bg-[#0d0d0d] p-3 min-w-0">
+                        <p className="text-[10px] uppercase tracking-wider text-neutral-500">Location</p>
+                        <p className="mt-1 text-sm font-medium text-white truncate" title={selectedNode.locationName || 'Unknown'}>
+                          {selectedNode.locationName || 'Unknown'}
+                        </p>
+                        <p className="mt-0.5 text-xs text-neutral-500">#{selectedNode.locationId}</p>
+                      </div>
+                      <div className="rounded-xl border border-neutral-800 bg-[#0d0d0d] p-3 min-w-0">
+                        <p className="text-[10px] uppercase tracking-wider text-neutral-500">Pterodactyl</p>
+                        <p className="mt-1 text-sm font-medium text-white">Node #{selectedNode.pterodactylNodeId}</p>
+                        <p className="mt-0.5 text-xs text-neutral-500 truncate" title={selectedNode.lastSyncedAt ? new Date(selectedNode.lastSyncedAt).toLocaleString() : 'Unknown'}>
+                          {selectedNode.lastSyncedAt ? new Date(selectedNode.lastSyncedAt).toLocaleString() : 'Unknown'}
+                        </p>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+
+                <Card className="bg-[#111111] border-neutral-800">
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-sm font-semibold">Availability</CardTitle>
+                    <CardDescription className="text-xs">
+                      Current free capacity exposed by this node.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="grid gap-3 md:grid-cols-2">
+                    <div className="rounded-xl border border-neutral-800 bg-[#0d0d0d] p-3 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <div className="rounded-lg bg-blue-500/10 p-1.5">
+                          <MemoryStick className="h-3.5 w-3.5 text-neutral-300" />
+                        </div>
+                        <div>
+                          <p className="text-[10px] uppercase tracking-wider text-neutral-500">Free Memory</p>
+                          <p className="text-lg font-semibold text-white">{formatResourceValue(selectedNodeMemory.free)}</p>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="rounded-xl border border-neutral-800 bg-[#0d0d0d] p-3 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <div className="rounded-lg bg-emerald-500/10 p-1.5">
+                          <HardDrive className="h-3.5 w-3.5 text-neutral-300" />
+                        </div>
+                        <div>
+                          <p className="text-[10px] uppercase tracking-wider text-neutral-500">Free Disk</p>
+                          <p className="text-lg font-semibold text-white">{formatResourceValue(selectedNodeDisk.free)}</p>
+                        </div>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              </div>
+
+              {/* Resource Usage */}
               <Card className="bg-[#111111] border-neutral-800">
-                <CardHeader>
-                  <CardTitle className="text-base">Basic Information</CardTitle>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-semibold">Resource Usage</CardTitle>
+                  <CardDescription className="text-xs">
+                    Allocated versus total capacity reported by Pterodactyl.
+                  </CardDescription>
                 </CardHeader>
-                <CardContent className="grid grid-cols-2 gap-4">
-                  <div>
-                    <p className="text-sm font-medium text-neutral-400">Name</p>
-                    <p>{selectedNode.name}</p>
-                  </div>
-                  <div>
-                    <p className="text-sm font-medium text-neutral-400">FQDN</p>
-                    <p>{selectedNode.fqdn}</p>
-                  </div>
-                  <div>
-                    <p className="text-sm font-medium text-neutral-400">Status</p>
-                    <div className="flex items-center gap-2">
-                      <div className={`w-2 h-2 rounded-full ${
-                        selectedNode.enabled ? 'bg-green-500' : 'bg-red-500'
-                      }`} />
-                      <span>{selectedNode.enabled ? 'Enabled' : 'Disabled'}</span>
+                <CardContent className="grid gap-4">
+                  {/* Memory */}
+                  <div className="rounded-xl border border-neutral-800 bg-[#0d0d0d] p-3 min-w-0">
+                    <div className="flex items-start justify-between gap-2 mb-2">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <div className="rounded-lg bg-blue-500/10 p-1.5 shrink-0">
+                          <MemoryStick className="h-3.5 w-3.5 text-neutral-300" />
+                        </div>
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium text-white">Memory</p>
+                          <p className="text-xs text-neutral-500">{selectedNodeMemory.percentage.toFixed(1)}% allocated</p>
+                        </div>
+                      </div>
+                      <p className="text-sm text-neutral-400 shrink-0">{formatResourceValue(selectedNodeMemory.total)}</p>
+                    </div>
+                    <div className="h-1.5 overflow-hidden rounded-full bg-neutral-800">
+                      <div
+                        className="h-full rounded-full bg-neutral-400 transition-all"
+                        style={{ width: `${selectedNodeMemory.percentage}%` }}
+                      />
+                    </div>
+                    <div className="mt-3 grid grid-cols-3 gap-2 text-xs">
+                      <div>
+                        <p className="text-neutral-500">Allocated</p>
+                        <p className="mt-0.5 font-medium text-white truncate">{formatResourceValue(selectedNodeMemory.allocated)}</p>
+                      </div>
+                      <div>
+                        <p className="text-neutral-500">Free</p>
+                        <p className="mt-0.5 font-medium text-white truncate">{formatResourceValue(selectedNodeMemory.free)}</p>
+                      </div>
+                      <div>
+                        <p className="text-neutral-500">Total</p>
+                        <p className="mt-0.5 font-medium text-white truncate">{formatResourceValue(selectedNodeMemory.total)}</p>
+                      </div>
                     </div>
                   </div>
-                  <div>
-                    <p className="text-sm font-medium text-neutral-400">Location</p>
-                    <p>{selectedNode.locationName || 'Unknown'}</p>
+
+                  {/* Disk */}
+                  <div className="rounded-xl border border-neutral-800 bg-[#0d0d0d] p-3 min-w-0">
+                    <div className="flex items-start justify-between gap-2 mb-2">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <div className="rounded-lg bg-emerald-500/10 p-1.5 shrink-0">
+                          <HardDrive className="h-3.5 w-3.5 text-neutral-300" />
+                        </div>
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium text-white">Disk</p>
+                          <p className="text-xs text-neutral-500">{selectedNodeDisk.percentage.toFixed(1)}% allocated</p>
+                        </div>
+                      </div>
+                      <p className="text-sm text-neutral-400 shrink-0">{formatResourceValue(selectedNodeDisk.total)}</p>
+                    </div>
+                    <div className="h-1.5 overflow-hidden rounded-full bg-neutral-800">
+                      <div
+                        className="h-full rounded-full bg-neutral-400 transition-all"
+                        style={{ width: `${selectedNodeDisk.percentage}%` }}
+                      />
+                    </div>
+                    <div className="mt-3 grid grid-cols-3 gap-2 text-xs">
+                      <div>
+                        <p className="text-neutral-500">Allocated</p>
+                        <p className="mt-0.5 font-medium text-white truncate">{formatResourceValue(selectedNodeDisk.allocated)}</p>
+                      </div>
+                      <div>
+                        <p className="text-neutral-500">Free</p>
+                        <p className="mt-0.5 font-medium text-white truncate">{formatResourceValue(selectedNodeDisk.free)}</p>
+                      </div>
+                      <div>
+                        <p className="text-neutral-500">Total</p>
+                        <p className="mt-0.5 font-medium text-white truncate">{formatResourceValue(selectedNodeDisk.total)}</p>
+                      </div>
+                    </div>
                   </div>
                 </CardContent>
               </Card>
 
-              {/* Resources */}
+              {/* Raw Metadata */}
               <Card className="bg-[#111111] border-neutral-800">
-                <CardHeader>
-                  <CardTitle className="text-base">Resources</CardTitle>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-semibold">Raw Node Metadata</CardTitle>
+                  <CardDescription className="text-xs">
+                    Useful values for debugging and capacity checks.
+                  </CardDescription>
                 </CardHeader>
                 <CardContent>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="flex items-center gap-3 p-3 bg-[#0a0a0a] rounded-lg">
-                      <div className="p-2 bg-blue-500/10 rounded-lg">
-                        <MemoryStick className="w-5 h-5 text-blue-500" />
-                      </div>
-                      <div>
-                        <p className="text-sm font-medium text-neutral-400">Memory</p>
-                        <p className="text-lg font-bold">{Math.round((selectedNode.memory || 0) / 1024)} GB</p>
-                      </div>
+                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                    <div className="rounded-xl border border-neutral-800 bg-[#0d0d0d] p-3 min-w-0">
+                      <p className="text-[10px] uppercase tracking-wider text-neutral-500">Node ID</p>
+                      <p className="mt-1 text-sm font-semibold text-white truncate">{selectedNode.id}</p>
                     </div>
-                    <div className="flex items-center gap-3 p-3 bg-[#0a0a0a] rounded-lg">
-                      <div className="p-2 bg-purple-500/10 rounded-lg">
-                        <HardDrive className="w-5 h-5 text-purple-500" />
-                      </div>
-                      <div>
-                        <p className="text-sm font-medium text-neutral-400">Disk</p>
-                        <p className="text-lg font-bold">{Math.round((selectedNode.disk || 0) / 1024)} GB</p>
-                      </div>
+                    <div className="rounded-xl border border-neutral-800 bg-[#0d0d0d] p-3 min-w-0">
+                      <p className="text-[10px] uppercase tracking-wider text-neutral-500">Location ID</p>
+                      <p className="mt-1 text-sm font-semibold text-white truncate">{selectedNode.locationId}</p>
+                    </div>
+                    <div className="rounded-xl border border-neutral-800 bg-[#0d0d0d] p-3 min-w-0">
+                      <p className="text-[10px] uppercase tracking-wider text-neutral-500">Allocated Memory</p>
+                      <p className="mt-1 text-sm font-semibold text-white truncate">{selectedNode.allocated_resources?.memory || 0} MB</p>
+                    </div>
+                    <div className="rounded-xl border border-neutral-800 bg-[#0d0d0d] p-3 min-w-0">
+                      <p className="text-[10px] uppercase tracking-wider text-neutral-500">Allocated Disk</p>
+                      <p className="mt-1 text-sm font-semibold text-white truncate">{selectedNode.allocated_resources?.disk || 0} MB</p>
                     </div>
                   </div>
                 </CardContent>
@@ -710,7 +879,7 @@ export default function AdminNodes() {
             </div>
           )}
 
-          <DialogFooter>
+          <DialogFooter className="bg-[#0a0a0a] border-t border-neutral-800 pt-4 pb-1 mt-2">
             <Button variant="outline" onClick={() => setIsNodeDetailsOpen(false)}>
               Close
             </Button>
