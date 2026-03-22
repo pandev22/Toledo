@@ -215,7 +215,7 @@ const [userDropdownOpen, setUserDropdownOpen] = useState(false);
     { icon: WindowIcon, label: 'Overview', path: '/admin/overview' },
     { icon: ServerIcon, label: 'Servers', path: '/admin/servers' },
     { icon: UsersIcon, label: 'Users', path: '/admin/users' },
-    { icon: ServerStackIcon, label: 'Nodes', path: '/admin/nodes' },
+    { icon: ServerStackIcon, label: 'Locations & Nodes', path: '/admin/nodes' },
     { icon: CubeIcon, label: 'Eggs', path: '/admin/eggs' },
     { icon: TicketIcon, label: 'Tickets', path: '/admin/tickets' },
     { icon: SignalIcon, label: 'Radar', path: '/admin/radar' },
@@ -294,6 +294,7 @@ const [userDropdownOpen, setUserDropdownOpen] = useState(false);
               {showServerSection && (
                 <div className="py-2 px-4">
                   <button
+                    type="button"
                     onClick={() => navigate('/dashboard')}
                     className="flex text-white/70 hover:text-white transition duration-200 text-sm active:scale-95 items-center"
                   >
@@ -427,6 +428,7 @@ const [userDropdownOpen, setUserDropdownOpen] = useState(false);
                   </div>
                   <div className="flex flex-col relative" ref={userDropdownRef}>
                     <button
+                      type="button"
                       className="flex items-center gap-1 text-sm font-medium hover:text-white transition-all duration-200 active:scale-95"
                       onClick={() => setUserDropdownOpen(!userDropdownOpen)}
                     >
@@ -451,6 +453,7 @@ const [userDropdownOpen, setUserDropdownOpen] = useState(false);
                           </div>
                           <div className="py-1">
                             <button
+                              type="button"
                               className="flex items-center w-full px-3 py-2.5 text-sm text-left hover:bg-white/5 transition-all duration-200 active:scale-95"
                               onClick={() => {
                                 navigate('/account');
@@ -463,6 +466,7 @@ const [userDropdownOpen, setUserDropdownOpen] = useState(false);
                           </div>
                           <div className="py-1">
                             <button
+                              type="button"
                               className="flex items-center w-full px-3 py-2.5 text-sm text-left hover:bg-white/5 transition-all duration-200 active:scale-95"
                               onClick={() => {
                                 navigate('/passkeys');
@@ -475,6 +479,7 @@ const [userDropdownOpen, setUserDropdownOpen] = useState(false);
                           </div>
                           <div className="py-1 border-t border-white/5">
                             <button
+                              type="button"
                               className="flex items-center w-full px-3 py-2.5 text-sm text-left text-red-400 hover:bg-red-950/30 hover:text-red-300 transition-all duration-200 active:scale-95"
                               onClick={() => {
                                 handleLogout();
@@ -507,6 +512,7 @@ const [userDropdownOpen, setUserDropdownOpen] = useState(false);
           {/* Mobile Header */}
           <header className="lg:hidden fixed top-0 left-0 right-0 h-12 bg-[#08090c] border-b border-white/5 flex items-center justify-between px-2 z-30">
             <button 
+              type="button"
               onClick={() => setMobileMenuOpen(true)} 
               className="p-1.5 hover:bg-white/5 rounded-md transition-colors"
             >
@@ -535,6 +541,7 @@ const [userDropdownOpen, setUserDropdownOpen] = useState(false);
                 {showServerSection && (
                   <div className="py-2 px-4 border-b border-white/5">
                     <button
+                      type="button"
                       onClick={() => {
                         navigate('/dashboard');
                         setMobileMenuOpen(false);
@@ -666,6 +673,7 @@ const [userDropdownOpen, setUserDropdownOpen] = useState(false);
                   {/* Quick Actions */}
                   <div className="space-y-1">
                     <button
+                      type="button"
                       onClick={() => {
                         navigate('/account');
                         setMobileMenuOpen(false);
@@ -676,6 +684,7 @@ const [userDropdownOpen, setUserDropdownOpen] = useState(false);
                       My account
                     </button>
                     <button
+                      type="button"
                       onClick={() => {
                         handleLogout();
                         setMobileMenuOpen(false);

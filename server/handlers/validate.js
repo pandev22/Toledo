@@ -286,6 +286,20 @@ const schemas = {
     order: z.number().int().min(0).optional()
   }),
 
+  locationConfigUpdate: z.object({
+    name: z.string().min(1).max(100).trim().optional(),
+    description: z.string().max(500).trim().optional(),
+    enabled: z.boolean().optional(),
+    packages: z.array(z.string().trim()).optional(),
+    full: z.boolean().optional(),
+    flags: z.array(z.string().trim()).optional(),
+    order: z.number().int().min(0).optional()
+  }),
+
+  nodeConfigUpdate: z.object({
+    enabled: z.boolean().optional()
+  }),
+
   // Boost management
   boostApply: z.object({
     serverId: z.string({ required_error: 'Server ID is required' }).min(1),

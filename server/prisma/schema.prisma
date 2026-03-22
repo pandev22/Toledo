@@ -282,6 +282,42 @@ model EggCategory {
   eggs EggConfig[]
 }
 
+model LocationConfig {
+  id                    String  @id     // Pterodactyl location id as string
+  pterodactylLocationId Int     @unique
+  name                  String
+  description           String  @default("")
+  enabled               Boolean @default(true)
+  packages              String  @default("[]") // JSON array of package names
+  full                  Boolean @default(false)
+  flags                 String  @default("[]") // JSON array of strings
+  orderIndex            Int     @default(0)
+  lastSyncedAt          DateTime?
+
+  nodes NodeConfig[]
+
+  @@index([enabled])
+  @@index([orderIndex])
+}
+
+model NodeConfig {
+  id                String  @id     // Pterodactyl node id as string
+  pterodactylNodeId Int     @unique
+  locationId        String
+  name              String
+  fqdn              String
+  memory            Int     @default(0)
+  disk              Int     @default(0)
+  allocatedResources String @default("{}") // JSON object
+  enabled           Boolean @default(true)
+  lastSyncedAt      DateTime?
+
+  location LocationConfig @relation(fields: [locationId], references: [id], onDelete: Cascade)
+
+  @@index([enabled])
+  @@index([locationId])
+}
+
 model InstalledPlugin {
   id            String   @id @default(cuid())
   serverId      String
