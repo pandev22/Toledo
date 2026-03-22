@@ -109,6 +109,81 @@ module.exports.load = async function (app, db) {
     res.json(getPublicSettings());
   });
 
+  app.get("/api/v5/resources", async (req, res) => {
+    try {
+      if (!req.session || !req.session.userinfo) {
+        return res.status(401).json({
+          error: "Not authenticated"
+        });
+      }
+
+      const userId = req.session.userinfo.id;
+      const user = await db.user.findUnique({
+        where: { id: req.session.userinfo.id },
+        select: {
+          extraRam: true,
+          extraDisk: true,
+          extraCpu: true,
+          extraServers: true
+        }
+      });
+
+      const remaining = {
+        ram: user?.extraRam ?? 0,
+        disk: user?.extraDisk ?? 0,
+        cpu: user?.extraCpu ?? 0,
+        servers: user?.extraServers ?? 0
+      };
+
+      let current = {
+        ram: 0,
+        disk: 0,
+        cpu: 0,
+        servers: 0
+      };
+
+      try {
+        const pteroUser = await cache.getOrSet(
+          `ptero:user:${userId}:servers`,
+          () => getPteroUser(userId, db),
+          300
+        );
+        const ownedServers = pteroUser?.attributes?.relationships?.servers?.data ?? [];
+
+        current = ownedServers.reduce((totals, server) => {
+          const limits = server?.attributes?.limits ?? {};
+
+          return {
+            ram: totals.ram + (limits.memory ?? 0),
+            disk: totals.disk + (limits.disk ?? 0),
+            cpu: totals.cpu + (limits.cpu ?? 0),
+            servers: totals.servers + 1
+          };
+        }, current);
+      } catch (error) {
+        console.error('Error fetching current resource usage for /api/v5/resources:', error.message);
+      }
+
+      const limits = {
+        ram: current.ram + remaining.ram,
+        disk: current.disk + remaining.disk,
+        cpu: current.cpu + remaining.cpu,
+        servers: current.servers + remaining.servers
+      };
+
+      return res.json({
+        remaining,
+        current,
+        limits
+      });
+    } catch (error) {
+      console.error('Error in /api/v5/resources:', error);
+      return res.status(500).json({
+        error: 'Internal server error'
+      });
+    }
+  });
+
   app.get("/api/coins", async (req, res) => {
     if (!req.session.userinfo) {
       return res.status(401).json({
