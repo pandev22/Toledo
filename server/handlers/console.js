@@ -178,9 +178,9 @@ class RustStyleLogger {
   /**
    * Track requests with websocket
    */
-  wsRequestLogger(req, ws, next) {
-    this.log('INF', `WS ${req.originalUrl}`, {}, '#00b0ff');
-    next();
+  wsRequestLogger(ws, req) {
+    const requestUrl = req?.originalUrl || req?.url || 'unknown';
+    this.log('INF', `WS ${requestUrl}`, {}, '#00b0ff');
   }
 
   /**
