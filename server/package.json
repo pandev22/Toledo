@@ -37,10 +37,19 @@
   "scripts": {
     "mono:build": "cd ../frontend && npm run build",
     "mono:watch": "cd ../frontend && npm run dev",
-    "prisma:generate": "npx prisma generate",
-    "prisma:migrate": "npx prisma migrate dev",
-    "prisma:push": "npx prisma db push",
-    "postinstall": "npx prisma generate",
+    "prisma:generate": "node ./scripts/prisma-runner.js generate",
+    "prisma:generate:sqlite": "node ./scripts/prisma-runner.js generate --provider=sqlite",
+    "prisma:generate:mysql": "node ./scripts/prisma-runner.js generate --provider=mysql",
+    "prisma:migrate": "node ./scripts/prisma-runner.js migrate dev",
+    "prisma:migrate:sqlite": "node ./scripts/prisma-runner.js migrate dev --provider=sqlite",
+    "prisma:migrate:mysql": "node ./scripts/prisma-runner.js migrate dev --provider=mysql",
+    "prisma:push": "node ./scripts/prisma-runner.js db push",
+    "prisma:push:sqlite": "node ./scripts/prisma-runner.js db push --provider=sqlite",
+    "prisma:push:mysql": "node ./scripts/prisma-runner.js db push --provider=mysql",
+    "prisma:validate": "node ./scripts/prisma-runner.js validate",
+    "prisma:validate:sqlite": "node ./scripts/prisma-runner.js validate --provider=sqlite",
+    "prisma:validate:mysql": "node ./scripts/prisma-runner.js validate --provider=mysql",
+    "postinstall": "npm run prisma:generate",
     "start": "node --no-deprecation app.js"
   },
   "devDependencies": {

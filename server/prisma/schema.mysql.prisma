@@ -1,0 +1,311 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../generated/mysql-client"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model heliactyl {
+  key   String @id
+  value String @db.LongText
+}
+
+model keyv {
+  key   String @id
+  value String @db.LongText
+}
+
+model User {
+  id                  String   @id @default(cuid())
+  email               String   @unique
+  username            String   @unique
+  password            String   @db.Text
+  pterodactylId       Int?     @unique
+  discordId           String?  @unique
+  pteroUsername       String?  @db.Text
+  discordAccessToken  String?  @db.LongText
+  discordRefreshToken String?  @db.LongText
+  passkeysEnabled     Boolean  @default(false)
+  coins               Int      @default(0)
+  creditUsd           Float    @default(0)
+  packageName         String   @default("default")
+  sftpPassword        String?  @db.Text
+  extraRam            Int      @default(0)
+  extraDisk           Int      @default(0)
+  extraCpu            Int      @default(0)
+  extraServers        Int      @default(0)
+  currentStreak       Int      @default(0)
+  longestStreak       Int      @default(0)
+  lastClaimDate       String?  @db.Text
+  totalClaimed        Int      @default(0)
+  totalCoinsEarned    Int      @default(0)
+  streakProtection    Int      @default(0)
+  twoFactorEnabled    Boolean  @default(false)
+  twoFactorSecret     String?  @db.Text
+  backupCodes         String?  @db.LongText
+  twoFactorAt         DateTime?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  transactions    Transaction[]
+  notifications   Notification[]
+  authTokens      AuthToken[]
+  referralOwned   Referral?       @relation("ReferralOwner")
+  referralClaimed Referral?       @relation("ReferralClaimer")
+  boosts          Boost[]
+  stakes          Stake[]
+  subuserServers  SubuserServer[]
+  tickets         Ticket[]
+  ticketMessages  TicketMessage[]
+  passkeys        Passkey[]
+}
+
+model Transaction {
+  id          String   @id @default(cuid())
+  userId      String
+  type        String
+  amount      Int
+  description String   @db.Text
+  details     String?  @db.LongText
+  externalId  String?  @unique
+  createdAt   DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, type])
+  @@index([userId, createdAt])
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  action    String   @db.Text
+  name      String   @db.Text
+  read      Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, read])
+}
+
+model AuthToken {
+  id        String   @id @default(cuid())
+  userId    String
+  token     String   @unique
+  type      String
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model Referral {
+  id          String   @id @default(cuid())
+  code        String   @unique
+  userId      String   @unique
+  claimedById String?  @unique
+  claimedAt   DateTime?
+  createdAt   DateTime @default(now())
+
+  user      User  @relation("ReferralOwner", fields: [userId], references: [id], onDelete: Cascade)
+  claimedBy User? @relation("ReferralClaimer", fields: [claimedById], references: [id])
+}
+
+model Boost {
+  id            String   @id @default(cuid())
+  userId        String
+  serverId      String
+  serverName    String?  @db.Text
+  boostType     String
+  duration      String
+  durationMs    Int
+  price         Int
+  status        String   @default("pending")
+  scheduledFor  DateTime?
+  appliedAt     DateTime?
+  expiresAt     DateTime?
+  memoryDelta   Int      @default(0)
+  cpuDelta      Int      @default(0)
+  diskDelta     Int      @default(0)
+  initialLimits String?  @db.LongText
+  createdAt     DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([status, expiresAt])
+  @@index([userId])
+}
+
+model Stake {
+  id             String   @id @default(cuid())
+  userId         String
+  planId         String
+  amount         Int
+  accruedRewards Float    @default(0)
+  lastRewardAt   DateTime @default(now())
+  status         String   @default("active")
+  endTime        DateTime?
+  claimedAt      DateTime?
+  returnedAmount Int?
+  penalty        Float?
+  createdAt      DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([status, lastRewardAt])
+  @@index([userId])
+}
+
+model SubuserServer {
+  id         String  @id @default(cuid())
+  userId     String
+  serverId   String
+  serverName String? @db.Text
+  ownerId    String? @db.Text
+  source     String
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, serverId, source])
+  @@index([userId])
+}
+
+model Ticket {
+  id          String   @id @default(cuid())
+  userId      String
+  subject     String   @db.Text
+  description String   @db.LongText
+  priority    String   @default("low")
+  category    String   @default("general")
+  status      String   @default("open")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user     User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messages TicketMessage[]
+
+  @@index([userId])
+  @@index([status])
+}
+
+model TicketMessage {
+  id        String   @id @default(cuid())
+  ticketId  String
+  userId    String
+  content   String   @db.LongText
+  isStaff   Boolean  @default(false)
+  isSystem  Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  ticket Ticket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([ticketId])
+}
+
+model Passkey {
+  id                  String   @id @default(cuid())
+  userId              String
+  name                String   @db.Text
+  credentialID        String   @unique
+  credentialPublicKey String   @db.LongText
+  counter             Int      @default(0)
+  transports          String?  @db.LongText
+  createdAt           DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model EggConfig {
+  id                String   @id
+  pterodactylNestId Int
+  pterodactylEggId  Int
+  nestName          String   @db.Text
+  originalName      String   @db.Text
+  displayName       String   @db.Text
+  description       String   @default("") @db.LongText
+  dockerImage       String   @db.LongText
+  startup           String   @db.LongText
+  environment       String   @default("{}") @db.LongText
+  enabled           Boolean  @default(true)
+  categoryId        String?
+  minimum           String   @default("{}") @db.LongText
+  maximum           String   @default("{}") @db.LongText
+  packages          String   @default("[]") @db.LongText
+  featureLimits     String   @default("{}") @db.LongText
+  orderIndex        Int      @default(0)
+  lastSyncedAt      DateTime?
+
+  category EggCategory? @relation(fields: [categoryId], references: [id])
+
+  @@index([enabled])
+  @@index([categoryId])
+}
+
+model EggCategory {
+  id         String @id
+  name       String @db.Text
+  icon       String @default("")
+  orderIndex Int    @default(0)
+
+  eggs EggConfig[]
+}
+
+model LocationConfig {
+  id                    String   @id
+  pterodactylLocationId Int      @unique
+  name                  String   @db.Text
+  description           String   @default("") @db.LongText
+  enabled               Boolean  @default(true)
+  packages              String   @default("[]") @db.LongText
+  full                  Boolean  @default(false)
+  flags                 String   @default("[]") @db.LongText
+  orderIndex            Int      @default(0)
+  lastSyncedAt          DateTime?
+
+  nodes NodeConfig[]
+
+  @@index([enabled])
+  @@index([orderIndex])
+}
+
+model NodeConfig {
+  id                 String   @id
+  pterodactylNodeId  Int      @unique
+  locationId         String
+  name               String   @db.Text
+  fqdn               String   @db.Text
+  memory             Int      @default(0)
+  disk               Int      @default(0)
+  allocatedResources String   @default("{}") @db.LongText
+  enabled            Boolean  @default(true)
+  lastSyncedAt       DateTime?
+
+  location LocationConfig @relation(fields: [locationId], references: [id], onDelete: Cascade)
+
+  @@index([enabled])
+  @@index([locationId])
+}
+
+model InstalledPlugin {
+  id            String   @id @default(cuid())
+  serverId      String
+  pluginId      String
+  name          String   @db.Text
+  pluginName    String   @db.Text
+  platform      String
+  installedAt   DateTime @default(now())
+  manuallyAdded Boolean  @default(false)
+
+  @@unique([serverId, pluginId, platform])
+  @@index([serverId])
+}

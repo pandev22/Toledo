@@ -1,6 +1,9 @@
 "use strict";
 
-const { PrismaClient } = require("@prisma/client");
+const dbProvider = (process.env.DB_PROVIDER || "sqlite").toLowerCase();
+const { PrismaClient } = dbProvider === "mysql"
+  ? require("./generated/mysql-client")
+  : require("@prisma/client");
 
 /**
  * Prisma singleton — every module receives this same instance via `load(app, db)`.
@@ -15,7 +18,12 @@ let prisma;
 
 function getClient() {
   if (!prisma) {
+    const databaseUrl = dbProvider === "mysql"
+      ? (process.env.MYSQL_DATABASE_URL || process.env.DATABASE_URL)
+      : (process.env.SQLITE_DATABASE_URL || process.env.DATABASE_URL);
+
     prisma = new PrismaClient({
+      ...(databaseUrl ? { datasources: { db: { url: databaseUrl } } } : {}),
       log:
         process.env.NODE_ENV === "development"
           ? ["warn", "error"]

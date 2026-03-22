@@ -121,6 +121,7 @@ module.exports.load = async function (app, db) {
       const user = await db.user.findUnique({
         where: { id: req.session.userinfo.id },
         select: {
+          packageName: true,
           extraRam: true,
           extraDisk: true,
           extraCpu: true,
@@ -128,11 +129,19 @@ module.exports.load = async function (app, db) {
         }
       });
 
-      const remaining = {
-        ram: user?.extraRam ?? 0,
-        disk: user?.extraDisk ?? 0,
-        cpu: user?.extraCpu ?? 0,
-        servers: user?.extraServers ?? 0
+      const packageKey = user?.packageName || settings.api?.client?.packages?.default || 'default';
+      const packageConfig = settings.api?.client?.packages?.list?.[packageKey] || settings.api?.client?.packages?.list?.default || {
+        ram: 0,
+        disk: 0,
+        cpu: 0,
+        servers: 0
+      };
+
+      const allowed = {
+        ram: (packageConfig.ram ?? 0) + (user?.extraRam ?? 0),
+        disk: (packageConfig.disk ?? 0) + (user?.extraDisk ?? 0),
+        cpu: (packageConfig.cpu ?? 0) + (user?.extraCpu ?? 0),
+        servers: (packageConfig.servers ?? 0) + (user?.extraServers ?? 0)
       };
 
       let current = {
@@ -164,14 +173,23 @@ module.exports.load = async function (app, db) {
         console.error('Error fetching current resource usage for /api/v5/resources:', error.message);
       }
 
+      const remaining = {
+        ram: Math.max(allowed.ram - current.ram, 0),
+        disk: Math.max(allowed.disk - current.disk, 0),
+        cpu: Math.max(allowed.cpu - current.cpu, 0),
+        servers: Math.max(allowed.servers - current.servers, 0)
+      };
+
       const limits = {
-        ram: current.ram + remaining.ram,
-        disk: current.disk + remaining.disk,
-        cpu: current.cpu + remaining.cpu,
-        servers: current.servers + remaining.servers
+        ram: allowed.ram,
+        disk: allowed.disk,
+        cpu: allowed.cpu,
+        servers: allowed.servers
       };
 
       return res.json({
+        package: packageKey,
+        allowed,
         remaining,
         current,
         limits
