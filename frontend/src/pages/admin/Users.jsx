@@ -72,6 +72,7 @@ import {
 } from 'lucide-react';
 import axios from 'axios';
 import { useToast } from "@/hooks/use-toast";
+import { Pagination } from '@/components/Pagination';
 
 
 // Resource Info Component
@@ -132,16 +133,18 @@ function UserForm({ user, onSubmit, isSubmitting }) {
     <div className="grid gap-6 py-4">
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div className="space-y-2">
-          <label className="text-sm font-medium">Email</label>
+          <label htmlFor="user-form-email" className="text-sm font-medium">Email</label>
           <Input
+            id="user-form-email"
             value={formData.email}
             onChange={e => setFormData({ ...formData, email: e.target.value })}
             placeholder="user@example.com"
           />
         </div>
         <div className="space-y-2">
-          <label className="text-sm font-medium">Username</label>
+          <label htmlFor="user-form-username" className="text-sm font-medium">Username</label>
           <Input
+            id="user-form-username"
             value={formData.username}
             onChange={e => setFormData({ ...formData, username: e.target.value })}
             placeholder="username"
@@ -151,16 +154,18 @@ function UserForm({ user, onSubmit, isSubmitting }) {
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div className="space-y-2">
-          <label className="text-sm font-medium">First Name</label>
+          <label htmlFor="user-form-first-name" className="text-sm font-medium">First Name</label>
           <Input
+            id="user-form-first-name"
             value={formData.first_name}
             onChange={e => setFormData({ ...formData, first_name: e.target.value })}
             placeholder="John"
           />
         </div>
         <div className="space-y-2">
-          <label className="text-sm font-medium">Last Name</label>
+          <label htmlFor="user-form-last-name" className="text-sm font-medium">Last Name</label>
           <Input
+            id="user-form-last-name"
             value={formData.last_name}
             onChange={e => setFormData({ ...formData, last_name: e.target.value })}
             placeholder="Doe"
@@ -169,10 +174,11 @@ function UserForm({ user, onSubmit, isSubmitting }) {
       </div>
 
       <div className="space-y-2">
-        <label className="text-sm font-medium">
+        <label htmlFor="user-form-password" className="text-sm font-medium">
           {user ? 'New Password (leave empty to keep unchanged)' : 'Password'}
         </label>
         <Input
+          id="user-form-password"
           type="password"
           value={formData.password}
           onChange={e => setFormData({ ...formData, password: e.target.value })}
@@ -189,16 +195,18 @@ function UserForm({ user, onSubmit, isSubmitting }) {
         <TabsContent value="resources" className="space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
-              <label className="text-sm font-medium">Coins</label>
+              <label htmlFor="user-form-coins" className="text-sm font-medium">Coins</label>
               <Input
+                id="user-form-coins"
                 type="number"
                 value={formData.coins}
                 onChange={e => setFormData({ ...formData, coins: parseInt(e.target.value) || 0 })}
               />
             </div>
             <div className="space-y-2">
-              <label className="text-sm font-medium">Server Limit</label>
+              <label htmlFor="user-form-servers" className="text-sm font-medium">Server Limit</label>
               <Input
+                id="user-form-servers"
                 type="number"
                 value={formData.servers}
                 onChange={e => setFormData({ ...formData, servers: parseInt(e.target.value) || 0 })}
@@ -208,24 +216,27 @@ function UserForm({ user, onSubmit, isSubmitting }) {
 
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div className="space-y-2">
-              <label className="text-sm font-medium">RAM (MB)</label>
+              <label htmlFor="user-form-ram" className="text-sm font-medium">RAM (MB)</label>
               <Input
+                id="user-form-ram"
                 type="number"
                 value={formData.ram}
                 onChange={e => setFormData({ ...formData, ram: parseInt(e.target.value) || 0 })}
               />
             </div>
             <div className="space-y-2">
-              <label className="text-sm font-medium">Disk (MB)</label>
+              <label htmlFor="user-form-disk" className="text-sm font-medium">Disk (MB)</label>
               <Input
+                id="user-form-disk"
                 type="number"
                 value={formData.disk}
                 onChange={e => setFormData({ ...formData, disk: parseInt(e.target.value) || 0 })}
               />
             </div>
             <div className="space-y-2">
-              <label className="text-sm font-medium">CPU (%)</label>
+              <label htmlFor="user-form-cpu" className="text-sm font-medium">CPU (%)</label>
               <Input
+                id="user-form-cpu"
                 type="number"
                 value={formData.cpu}
                 onChange={e => setFormData({ ...formData, cpu: parseInt(e.target.value) || 0 })}
@@ -587,7 +598,7 @@ export default function UsersPage() {
               <TableBody>
                 {loadingUsers ? (
                   [...Array(5)].map((_, i) => (
-                    <TableRow key={i}>
+                    <TableRow key={`user-skeleton-${i + 1}`}>
                       <TableCell><Skeleton className="h-6 w-32" /></TableCell>
                       <TableCell><Skeleton className="h-6 w-48" /></TableCell>
                       <TableCell><Skeleton className="h-6 w-64" /></TableCell>
@@ -717,73 +728,15 @@ export default function UsersPage() {
             </Table></div>
           </div>
 
-          {/* Pagination */}
-          <div className="flex items-center justify-between mt-4 flex-wrap gap-2">
-            <div className="text-sm text-neutral-500">
-              Showing {((currentPage - 1) * parseInt(perPage)) + 1} to {Math.min(currentPage * parseInt(perPage), filteredUsers.length)} of {filteredUsers.length} users
-            </div>
-            <div className="flex gap-1 flex-wrap">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setCurrentPage(p => p - 1)}
-                disabled={currentPage === 1}
-              >
-                Previous
-              </Button>
-              {(() => {
-                const pages = [];
-                const maxVisible = 5;
-                let start = Math.max(1, currentPage - Math.floor(maxVisible / 2));
-                let end = Math.min(totalPages, start + maxVisible - 1);
-
-                if (end - start + 1 < maxVisible) {
-                  start = Math.max(1, end - maxVisible + 1);
-                }
-
-                if (start > 1) {
-                  pages.push(
-                    <Button key={1} variant="outline" size="sm" onClick={() => setCurrentPage(1)}>1</Button>
-                  );
-                  if (start > 2) {
-                    pages.push(<span key="start-ellipsis" className="px-2 text-neutral-500">...</span>);
-                  }
-                }
-
-                for (let i = start; i <= end; i++) {
-                  pages.push(
-                    <Button
-                      key={i}
-                      variant={currentPage === i ? "default" : "outline"}
-                      size="sm"
-                      onClick={() => setCurrentPage(i)}
-                    >
-                      {i}
-                    </Button>
-                  );
-                }
-
-                if (end < totalPages) {
-                  if (end < totalPages - 1) {
-                    pages.push(<span key="end-ellipsis" className="px-2 text-neutral-500">...</span>);
-                  }
-                  pages.push(
-                    <Button key={totalPages} variant="outline" size="sm" onClick={() => setCurrentPage(totalPages)}>{totalPages}</Button>
-                  );
-                }
-
-                return pages;
-              })()}
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setCurrentPage(p => p + 1)}
-                disabled={currentPage === totalPages}
-              >
-                Next
-              </Button>
-            </div>
-          </div>
+          <Pagination
+            page={currentPage}
+            totalPages={totalPages}
+            perPage={parseInt(perPage, 10)}
+            total={filteredUsers.length}
+            hasNextPage={currentPage < totalPages}
+            hasPrevPage={currentPage > 1}
+            onPageChange={setCurrentPage}
+          />
         </CardContent>
       </Card>
 

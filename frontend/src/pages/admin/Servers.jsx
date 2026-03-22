@@ -7,6 +7,7 @@ import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Pagination } from '@/components/Pagination';
 import { useSettings } from '@/hooks/useSettings';
 import {
   HoverCard,
@@ -351,77 +352,15 @@ export default function AdminServersPage() {
             </Table>
           </div>
 
-          <div className="flex flex-col sm:flex-row items-center justify-between mt-4 gap-4">
-            <div className="text-sm text-neutral-500 text-center sm:text-left">
-              Showing {filteredAndSortedServers.length > 0 ? ((currentPage - 1) * parseInt(perPage)) + 1 : 0} to {Math.min(currentPage * parseInt(perPage), filteredAndSortedServers.length)} of {filteredAndSortedServers.length} servers
-            </div>
-
-            <div className="flex gap-1 flex-wrap justify-center">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setCurrentPage(p => p - 1)}
-                disabled={currentPage === 1 || totalPages === 0}
-              >
-                Previous
-              </Button>
-
-              {(() => {
-                const pages = [];
-                const maxVisible = 5;
-                if (totalPages === 0) return pages;
-
-                let start = Math.max(1, currentPage - Math.floor(maxVisible / 2));
-                let end = Math.min(totalPages, start + maxVisible - 1);
-
-                if (end - start + 1 < maxVisible) {
-                  start = Math.max(1, end - maxVisible + 1);
-                }
-
-                if (start > 1) {
-                  pages.push(
-                    <Button key={1} variant="outline" size="sm" onClick={() => setCurrentPage(1)}>1</Button>
-                  );
-                  if (start > 2) {
-                    pages.push(<span key="start-ellipsis" className="px-2 text-neutral-500 content-center">...</span>);
-                  }
-                }
-
-                for (let i = start; i <= end; i++) {
-                  pages.push(
-                    <Button
-                      key={i}
-                      variant={currentPage === i ? "default" : "outline"}
-                      size="sm"
-                      onClick={() => setCurrentPage(i)}
-                    >
-                      {i}
-                    </Button>
-                  );
-                }
-
-                if (end < totalPages) {
-                  if (end < totalPages - 1) {
-                    pages.push(<span key="end-ellipsis" className="px-2 text-neutral-500 content-center">...</span>);
-                  }
-                  pages.push(
-                    <Button key={totalPages} variant="outline" size="sm" onClick={() => setCurrentPage(totalPages)}>{totalPages}</Button>
-                  );
-                }
-
-                return pages;
-              })()}
-
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setCurrentPage(p => p + 1)}
-                disabled={currentPage === totalPages || totalPages === 0}
-              >
-                Next
-              </Button>
-            </div>
-          </div>
+          <Pagination
+            page={currentPage}
+            totalPages={totalPages}
+            perPage={parseInt(perPage, 10)}
+            total={filteredAndSortedServers.length}
+            hasNextPage={currentPage < totalPages}
+            hasPrevPage={currentPage > 1}
+            onPageChange={setCurrentPage}
+          />
         </CardContent>
       </Card>
     </div>
