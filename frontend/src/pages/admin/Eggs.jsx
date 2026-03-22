@@ -29,6 +29,7 @@ import { Switch } from '@/components/ui/switch';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useToast } from '@/hooks/use-toast';
+import { showApiErrorToast } from '@/lib/api';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import axios from 'axios';
 import {
@@ -101,11 +102,7 @@ export default function AdminEggs() {
       setIsSyncing(false);
     },
     onError: (error) => {
-      toast({
-        title: "Sync Failed",
-        description: error.response?.data?.error || "Failed to sync eggs",
-        variant: "destructive"
-      });
+      showApiErrorToast(toast, error, 'Failed to sync eggs', 'Sync Failed');
       setIsSyncing(false);
     }
   });
@@ -120,11 +117,7 @@ export default function AdminEggs() {
       queryClient.invalidateQueries(['admin-eggs']);
     },
     onError: (error) => {
-      toast({
-        title: "Toggle Failed",
-        description: error.response?.data?.error || "Failed to toggle egg",
-        variant: "destructive"
-      });
+      showApiErrorToast(toast, error, 'Failed to toggle egg', 'Toggle Failed');
     }
   });
 
@@ -143,11 +136,7 @@ export default function AdminEggs() {
       });
     },
     onError: (error) => {
-      toast({
-        title: "Update Failed",
-        description: error.response?.data?.error || "Failed to update egg",
-        variant: "destructive"
-      });
+      showApiErrorToast(toast, error, 'Failed to update egg', 'Update Failed');
     }
   });
 
@@ -167,11 +156,7 @@ export default function AdminEggs() {
       });
     },
     onError: (error) => {
-      toast({
-        title: "Creation Failed",
-        description: error.response?.data?.error || "Failed to create category",
-        variant: "destructive"
-      });
+      showApiErrorToast(toast, error, 'Failed to create category', 'Creation Failed');
     }
   });
 
@@ -189,11 +174,7 @@ export default function AdminEggs() {
       });
     },
     onError: (error) => {
-      toast({
-        title: 'Deletion Failed',
-        description: error.response?.data?.error || 'Failed to delete category',
-        variant: 'destructive'
-      });
+      showApiErrorToast(toast, error, 'Failed to delete category', 'Deletion Failed');
     }
   });
 

@@ -73,6 +73,7 @@ import {
 import axios from 'axios';
 import { useToast } from "@/hooks/use-toast";
 import { Pagination } from '@/components/Pagination';
+import { showApiErrorToast } from '@/lib/api';
 
 
 // Resource Info Component
@@ -449,11 +450,7 @@ export default function UsersPage() {
       });
 
     } catch (err) {
-      toast({
-        title: "Error",
-        description: err.response?.data?.error || 'Failed to create user',
-        variant: "destructive",
-      });
+      showApiErrorToast(toast, err, 'Failed to create user');
 
     } finally {
       setIsSubmitting(false);
@@ -509,11 +506,7 @@ export default function UsersPage() {
       });
 
     } catch (err) {
-      toast({
-        title: "Error",
-        description: err.response?.data?.error || 'Failed to update user',
-        variant: "destructive",
-      });
+      showApiErrorToast(toast, err, 'Failed to update user');
 
     } finally {
       setIsSubmitting(false);
@@ -532,11 +525,7 @@ export default function UsersPage() {
       });
 
     } catch (err) {
-      toast({
-        title: "Error",
-        description: err.response?.data?.error || 'Failed to delete user',
-        variant: "destructive",
-      });
+      showApiErrorToast(toast, err, 'Failed to delete user');
 
     }
   };

@@ -10,6 +10,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { useToast } from '@/hooks/use-toast';
 import { formatBytes } from '@/lib/format';
+import { getApiErrorMessage, showApiErrorToast } from '@/lib/api';
 
 const BackupsPage = () => {
   const { id } = useParams();
@@ -27,7 +28,7 @@ const BackupsPage = () => {
       const response = await axios.get(`/api/server/${id}/backups`);
       setBackups(response.data.data);
     } catch (err) {
-      setError('Failed to fetch backups. Please try again later.');
+      setError(getApiErrorMessage(err, 'Failed to fetch backups. Please try again later.'));
       console.error(err);
     }
   };
@@ -43,11 +44,7 @@ const BackupsPage = () => {
         description: "Backup creation has been started.",
       });
     } catch (err) {
-      toast({
-        title: "Error",
-        description: "Failed to create backup. Please try again later.",
-        variant: "destructive",
-      });
+      showApiErrorToast(toast, err, 'Failed to create backup. Please try again later.');
       console.error(err);
     } finally {
       setCreateLoading(false);
@@ -63,11 +60,7 @@ const BackupsPage = () => {
         description: "Backup deleted successfully.",
       });
     } catch (err) {
-      toast({
-        title: "Error",
-        description: "Failed to delete backup. Please try again later.",
-        variant: "destructive",
-      });
+      showApiErrorToast(toast, err, 'Failed to delete backup. Please try again later.');
       console.error(err);
     }
   };

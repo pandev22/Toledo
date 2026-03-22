@@ -24,6 +24,7 @@ import {
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useToast } from "@/hooks/use-toast";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { showApiErrorToast } from '@/lib/api';
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
@@ -81,7 +82,7 @@ const SettingsPage = () => {
       setEditedVariables({});
     },
     onError: (error) => {
-      toast({ title: "Error", description: error.response?.data?.error || "Failed to update variables", variant: "destructive" });
+      showApiErrorToast(toast, error, 'Failed to update variables');
     }
   });
 
@@ -114,7 +115,7 @@ const SettingsPage = () => {
       });
     },
     onError: (error) => {
-      toast({ title: "Error", description: error.response?.data?.error || "Failed to update startup configuration", variant: "destructive" });
+      showApiErrorToast(toast, error, 'Failed to update startup configuration');
     }
   });
 
@@ -127,7 +128,7 @@ const SettingsPage = () => {
       toast({ title: "Success", description: "Server reinstallation initiated" });
     },
     onError: (error) => {
-      toast({ title: "Error", description: error.response?.data?.error || "Failed to reinstall server", variant: "destructive" });
+      showApiErrorToast(toast, error, 'Failed to reinstall server');
     }
   });
 
@@ -142,7 +143,7 @@ const SettingsPage = () => {
       navigate('/dashboard'); // Redirect to dashboard after deletion
     },
     onError: (error) => {
-      toast({ title: "Error", description: error.response?.data?.error || "Failed to delete server", variant: "destructive" });
+      showApiErrorToast(toast, error, 'Failed to delete server');
     }
   });
 
@@ -156,7 +157,7 @@ const SettingsPage = () => {
       toast({ title: "Success", description: "Server renamed successfully" });
     },
     onError: (error) => {
-      toast({ title: "Error", description: error.response?.data?.error || "Failed to rename server", variant: "destructive" });
+      showApiErrorToast(toast, error, 'Failed to rename server');
     }
   });
 
