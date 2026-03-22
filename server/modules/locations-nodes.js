@@ -49,32 +49,6 @@ function safeJsonParse(value, fallback) {
   }
 }
 
-function normalizePackages(locationConfig) {
-  const rawPackageValue = locationConfig?.package ?? locationConfig?.packages ?? [];
-
-  if (Array.isArray(rawPackageValue)) {
-    return rawPackageValue.filter(Boolean);
-  }
-
-  if (typeof rawPackageValue === 'string' && rawPackageValue.trim().length > 0) {
-    return [rawPackageValue.trim()];
-  }
-
-  return [];
-}
-
-function getLocationDefaults(locationId) {
-  const configLocation = settings.api?.client?.locations?.[String(locationId)] || {};
-
-  return {
-    name: configLocation.name || `Location ${locationId}`,
-    description: configLocation.description || '',
-    packages: normalizePackages(configLocation),
-    full: Boolean(configLocation.full),
-    flags: Array.isArray(configLocation.flags) ? configLocation.flags : []
-  };
-}
-
 async function checkAdminStatus(req, res, db) {
   if (!req.session.pterodactyl) return false;
 
@@ -175,19 +149,18 @@ async function syncLocationsAndNodes(db) {
 
   const locationRows = locationsResponse.data.data.map((location, index) => {
     const locationId = String(location.attributes.id);
-    const defaults = getLocationDefaults(locationId);
     const existing = existingLocationMap.get(locationId);
     const hasNodes = locationIdsWithNodes.has(locationId);
 
     return {
       id: locationId,
       pterodactylLocationId: location.attributes.id,
-      name: existing?.name || location.attributes.long || location.attributes.short || defaults.name,
-      description: existing?.description || location.attributes.long || defaults.description,
+      name: existing?.name || location.attributes.long || location.attributes.short || `Location ${locationId}`,
+      description: existing?.description || location.attributes.long || '',
       enabled: existing?.enabled ?? hasNodes,
-      packages: existing?.packages || JSON.stringify(defaults.packages),
-      full: existing?.full ?? defaults.full,
-      flags: existing?.flags || JSON.stringify(defaults.flags),
+      packages: existing?.packages || '[]',
+      full: existing?.full ?? false,
+      flags: existing?.flags || '[]',
       orderIndex: existing?.orderIndex ?? index,
       lastSyncedAt: syncedAt
     };
