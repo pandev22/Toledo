@@ -1,26 +1,3 @@
-import React, { useState, useEffect } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import axios from 'axios';
-import { useLocation } from 'react-router-dom';
-import {
-  Wallet,
-  Coins,
-  History,
-  Plus,
-  AlertCircle,
-  Check,
-  RefreshCw,
-  Trophy,
-  PiggyBank,
-  LayoutDashboard,
-  Activity,
-  Send,
-  ArrowDownLeft,
-  FileText,
-  Download
-} from 'lucide-react';
-import StakingPage from './Staking';
-import { Input } from "@/components/ui/input"; // Assuming you have these or use standard inputs
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -30,7 +7,29 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import axios from 'axios';
+import {
+  Activity,
+  AlertCircle,
+  ArrowDownLeft,
+  Check,
+  Coins,
+  Download,
+  FileText,
+  History,
+  LayoutDashboard,
+  PiggyBank,
+  Plus,
+  RefreshCw,
+  Send,
+  Trophy,
+  Wallet
+} from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { useLocation } from 'react-router-dom';
 import { useSettings } from '../../hooks/useSettings';
+import StakingPage from './Staking';
 
 export default function WalletPage() {
   const queryClient = useQueryClient();
@@ -203,8 +202,28 @@ export default function WalletPage() {
     }
   };
   
-  const handlePurchaseCoins = async (packageId) => {
+  const handlePurchaseCoins = async (packageId, priceUsd) => {
     try {
+      const currentCredit = billingInfo?.balances?.credit_usd || 0;
+
+      // If user doesn't have enough credit, redirect to Stripe checkout first
+      if (currentCredit < priceUsd) {
+        setLoading(prev => ({ ...prev, checkout: true }));
+        setError('');
+        
+        const response = await axios.post('/api/v5/billing/checkout', {
+          amount_usd: priceUsd
+        });
+
+        if (response.data.url) {
+          window.location.href = response.data.url;
+          return;
+        } else {
+          throw new Error('No redirect URL provided');
+        }
+      }
+
+      // Normal purchase if credit is sufficient
       setLoading(prev => ({ ...prev, purchase: true }));
       setError('');
       setSuccess('');
@@ -218,9 +237,9 @@ export default function WalletPage() {
       queryClient.invalidateQueries(['transactions']);
       queryClient.invalidateQueries(['storeConfig']); // Update header balance
     } catch (err) {
-      setError(err.response?.data?.error || 'Failed to purchase coins');
+      setError(err.response?.data?.error || err.message || 'Failed to process purchase');
     } finally {
-      setLoading(prev => ({ ...prev, purchase: false }));
+      setLoading(prev => ({ ...prev, purchase: false, checkout: false }));
     }
   };
 
@@ -403,24 +422,31 @@ export default function WalletPage() {
             </div>
             <div className="p-4">
               <div className="grid grid-cols-1 gap-3">
-                {billingInfo?.coin_packages?.slice(0, 3).map((pkg) => (
-                  <button
-                    key={pkg.amount}
-                    onClick={() => handlePurchaseCoins(pkg.amount)}
-                    disabled={loading.purchase || (billingInfo?.balances?.credit_usd < pkg.price_usd)}
-                    className={`
-                      relative group flex items-center justify-between p-3 rounded-lg border transition-all
-                      ${(billingInfo?.balances?.credit_usd >= pkg.price_usd)
-                        ? 'border-[#2e3337] hover:bg-[#202229]/50 hover:border-white/20 cursor-pointer active:scale-95' 
-                        : 'border-[#2e3337] opacity-50 cursor-not-allowed bg-[#202229]/20'}
-                    `}
-                  >
-                    <span className="font-medium text-white">{pkg.amount} Coins</span>
-                    <span className="text-xs px-2 py-1 rounded bg-[#202229] text-white border border-white/10">
-                      ${pkg.price_usd}
-                    </span>
-                  </button>
-                ))}
+                {billingInfo?.coin_packages?.slice(0, 3).map((pkg) => {
+                  const hasEnough = billingInfo?.balances?.credit_usd >= pkg.price_usd;
+                  return (
+                    <button
+                      key={pkg.amount}
+                      onClick={() => handlePurchaseCoins(pkg.amount, pkg.price_usd)}
+                      disabled={loading.purchase || loading.checkout}
+                      className={`
+                        relative group flex items-center justify-between p-3 rounded-lg border transition-all
+                        border-[#2e3337] hover:bg-[#202229]/50 hover:border-white/20 cursor-pointer active:scale-95
+                      `}
+                    >
+                      <div className="flex flex-col items-start">
+                        <span className="font-medium text-white">{pkg.amount} Coins</span>
+                        {!hasEnough && <span className="text-[10px] text-yellow-500/80">Buy directly via Stripe</span>}
+                      </div>
+                      <span className="text-xs px-2 py-1 rounded bg-[#202229] text-white border border-white/10 flex items-center gap-2">
+                        {loading.checkout && (billingInfo?.balances?.credit_usd < pkg.price_usd) ? (
+                          <RefreshCw className="w-3 h-3 animate-spin" />
+                        ) : null}
+                        ${pkg.price_usd}
+                      </span>
+                    </button>
+                  );
+                })}
                 <button 
                   onClick={() => window.location.href = '/coins/store'}
                   className="w-full py-2 text-xs text-[#95a1ad] hover:text-white transition-colors text-center"
