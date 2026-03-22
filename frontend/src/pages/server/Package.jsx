@@ -5,27 +5,22 @@ import axios from 'axios';
 import {
   CpuChipIcon,
   ArrowPathIcon,
-  ExclamationCircleIcon,
   CheckIcon,
   InformationCircleIcon
 } from '@heroicons/react/24/outline';
 import { MemoryStick, HardDrive } from 'lucide-react';
 
-import {
-  Alert,
-  AlertDescription,
-} from "@/components/ui/alert";
-
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { useToast } from "@/hooks/use-toast";
 
 export default function ServerPackagePage() {
   const { id } = useParams();
+  const { toast } = useToast();
   const [ram, setRam] = useState(0);
   const [disk, setDisk] = useState(0);
   const [cpu, setCpu] = useState(0);
-  const [error, setError] = useState('');
-  const [success, setSuccess] = useState('');
   const [isUpdating, setIsUpdating] = useState(false);
 
   // Get server details
@@ -74,8 +69,6 @@ export default function ServerPackagePage() {
 
   const handleUpdate = async () => {
     try {
-      setError('');
-      setSuccess('');
       setIsUpdating(true);
 
       if (!ram || !disk || !cpu) {
@@ -89,10 +82,19 @@ export default function ServerPackagePage() {
         cpu: parseInt(cpu)
       });
 
+      toast({
+        title: "Success",
+        description: "Server resources updated successfully.",
+      });
+
       // Reload page
       window.location.reload();
     } catch (err) {
-      setError(err.response?.data?.error || err.message);
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: err.response?.data?.error || err.message,
+      });
     } finally {
       setIsUpdating(false);
     }
@@ -132,30 +134,22 @@ export default function ServerPackagePage() {
           >
             Reset
           </Button>
-          <Button
-            onClick={handleUpdate}
-            disabled={!hasChanges || isUpdating}
-            className="flex items-center gap-2"
-          >
-            {isUpdating ? <ArrowPathIcon className="w-4 h-4 animate-spin" /> : <CheckIcon className="w-4 h-4" />}
-            Save Changes
-          </Button>
+          <ConfirmDialog
+            title="Save Changes"
+            description="Are you sure you want to update the server's resources? This might require a server restart to take effect."
+            onConfirm={handleUpdate}
+            trigger={
+              <Button
+                disabled={!hasChanges || isUpdating}
+                className="flex items-center gap-2"
+              >
+                {isUpdating ? <ArrowPathIcon className="w-4 h-4 animate-spin" /> : <CheckIcon className="w-4 h-4" />}
+                Save Changes
+              </Button>
+            }
+          />
         </div>
       </div>
-
-      {error && (
-        <Alert variant="destructive" className="bg-red-500/10 border-red-500/20 text-red-500">
-          <ExclamationCircleIcon className="w-4 h-4 mt-0.5 mr-2" />
-          <AlertDescription>{error}</AlertDescription>
-        </Alert>
-      )}
-
-      {success && (
-        <Alert className="bg-green-500/10 border-green-500/20 text-green-500">
-          <CheckIcon className="w-4 h-4 mt-0.5 mr-2" />
-          <AlertDescription>{success}</AlertDescription>
-        </Alert>
-      )}
 
       <div className="rounded-lg border border-white/5 text-white p-6 flex items-start">
         <InformationCircleIcon className="w-5 h-5 mt-0.5 mr-2 flex-shrink-0" />

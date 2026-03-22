@@ -51,8 +51,8 @@ async function checkAdminStatus(req, res, db) {
   }
 
   try {
-    const userId = await db.get("users-" + req.session.userinfo.id);
-    const response = await pteroApi.get(`/api/application/users/${userId}?include=servers`);
+    const pterodactylId = (await db.user.findUnique({ where: { id: req.session.userinfo.id }, select: { pterodactylId: true } }))?.pterodactylId;
+    const response = await pteroApi.get(`/api/application/users/${pterodactylId}?include=servers`);
     const isAdmin = response.data.attributes.root_admin === true;
 
     req.session[cacheKey] = {
@@ -65,32 +65,85 @@ async function checkAdminStatus(req, res, db) {
     console.error("Error checking admin status:", error.message);
     return false;
   }
+
 }
 
 /**
  * Get all eggs from database with their configurations
  */
 async function getEggsFromDB(db) {
-  const eggs = await db.get('eggs-config') || {};
+  const eggRows = await db.eggConfig.findMany();
+  const eggs = {};
+  for (const row of eggRows) {
+    eggs[row.id] = {
+      pterodactylNestId: row.pterodactylNestId,
+      pterodactylEggId: row.pterodactylEggId,
+      nestName: row.nestName,
+      originalName: row.originalName,
+      displayName: row.displayName,
+      description: row.description,
+      dockerImage: row.dockerImage,
+      startup: row.startup,
+      environment: JSON.parse(row.environment),
+      enabled: row.enabled,
+      category: row.categoryId || 'other',
+      minimum: JSON.parse(row.minimum),
+      maximum: row.maximum ? JSON.parse(row.maximum) : null,
+      packages: JSON.parse(row.packages),
+      featureLimits: JSON.parse(row.featureLimits),
+      order: row.orderIndex,
+      lastSyncedAt: row.lastSyncedAt?.toISOString() || null
+    };
+  }
   return eggs;
 }
+
 
 /**
  * Get all categories from database
  */
 async function getCategoriesFromDB(db) {
-  const categories = await db.get('eggs-categories') || [
-    { id: 'minecraft', name: 'Minecraft', icon: 'cube', order: 0 },
-    { id: 'discord', name: 'Discord Bots', icon: 'message-circle', order: 1 },
-    { id: 'web', name: 'Web Hosting', icon: 'globe', order: 2 },
-    { id: 'game', name: 'Game Servers', icon: 'gamepad-2', order: 3 },
-    { id: 'other', name: 'Other', icon: 'box', order: 99 }
-  ];
-  return categories;
+  const categories = await db.eggCategory.findMany({ orderBy: { orderIndex: 'asc' } });
+  if (categories.length === 0) {
+    return [
+      { id: 'minecraft', name: 'Minecraft', icon: 'cube', order: 0 },
+      { id: 'discord', name: 'Discord Bots', icon: 'message-circle', order: 1 },
+      { id: 'web', name: 'Web Hosting', icon: 'globe', order: 2 },
+      { id: 'game', name: 'Game Servers', icon: 'gamepad-2', order: 3 },
+      { id: 'other', name: 'Other', icon: 'box', order: 99 }
+    ];
+  }
+  return categories.map(c => ({ id: c.id, name: c.name, icon: c.icon, order: c.orderIndex }));
 }
+/**
+ * Ensure default categories exist in database
+ */
+async function ensureDefaultCategories(db) {
+  const defaults = [
+    { id: 'minecraft', name: 'Minecraft', icon: 'cube', orderIndex: 0 },
+    { id: 'discord', name: 'Discord Bots', icon: 'message-circle', orderIndex: 1 },
+    { id: 'web', name: 'Web Hosting', icon: 'globe', orderIndex: 2 },
+    { id: 'game', name: 'Game Servers', icon: 'gamepad-2', orderIndex: 3 },
+    { id: 'other', name: 'Other', icon: 'box', orderIndex: 99 }
+  ];
+
+  for (const category of defaults) {
+    await db.eggCategory.upsert({
+      where: { id: category.id },
+      update: {},
+      create: category
+    });
+  }
+  return defaults.map(d => d.id);
+}
+
+
 
 module.exports.load = async function (app, db) {
   const router = express.Router();
+  // Ensure categories exist on load
+  ensureDefaultCategories(db).catch(err => console.error("Error ensuring categories:", err));
+
 
   // ============================================
   // PUBLIC ENDPOINTS (for server creation)
@@ -109,9 +162,8 @@ module.exports.load = async function (app, db) {
       const eggs = await getEggsFromDB(db);
       const categories = await getCategoriesFromDB(db);
 
-      // Get user package for filtering
-      const packageName = await db.getCached(`package-${req.session.userinfo.id}`, 60000);
-      const userPackage = packageName || settings.api.client.packages.default;
+      const userRecord = await db.user.findUnique({ where: { id: req.session.userinfo.id }, select: { packageName: true } });
+      const userPackage = userRecord?.packageName || settings.api.client.packages.default;
 
       // Filter enabled eggs and format for client
       const enabledEggs = Object.entries(eggs)
@@ -197,16 +249,18 @@ module.exports.load = async function (app, db) {
       const eggs = await getEggsFromDB(db);
       const categories = await getCategoriesFromDB(db);
 
+      const lastSyncRow = await db.heliactyl.findUnique({ where: { key: 'eggs-last-sync' } });
       res.json({
         eggs,
         categories,
-        lastSync: await db.get('eggs-last-sync') || null
+        lastSync: lastSyncRow ? JSON.parse(lastSyncRow.value) : null
       });
     } catch (error) {
       console.error('Error fetching admin eggs:', error);
       res.status(500).json({ error: 'Failed to fetch eggs' });
     }
   });
+
 
   /**
    * POST /api/admin/eggs/sync
@@ -218,6 +272,10 @@ module.exports.load = async function (app, db) {
     }
 
     try {
+      // Ensure categories exist before sync and get valid IDs
+      const validCategoryIds = await db.eggCategory.findMany({ select: { id: true } }).then(cats => cats.map(c => c.id));
+      if (!validCategoryIds.includes('other')) await ensureDefaultCategories(db);
+
       // Get all nests
       const nestsResponse = await pteroApi.get('/api/application/nests?per_page=10000');
       const nests = nestsResponse.data.data;
@@ -259,6 +317,9 @@ module.exports.load = async function (app, db) {
             else if (nestNameLower.includes('web') || nestNameLower.includes('hosting')) category = 'web';
             else if (nestNameLower.includes('game')) category = 'game';
 
+            let finalCategory = existingEgg?.category || category;
+            if (!validCategoryIds.includes(finalCategory)) finalCategory = 'other';
+
             newEggs[eggId] = {
               // Pterodactyl data (always updated on sync)
               pterodactylNestId: nestId,
@@ -273,7 +334,7 @@ module.exports.load = async function (app, db) {
               // Configuration (preserve existing or set defaults)
               enabled: existingEgg?.enabled ?? false,
               displayName: existingEgg?.displayName || egg.attributes.name,
-              category: existingEgg?.category || category,
+              category: finalCategory,
               minimum: existingEgg?.minimum || { ram: 512, disk: 1024, cpu: 50 },
               maximum: existingEgg?.maximum || null,
               packages: existingEgg?.packages || [],
@@ -293,8 +354,58 @@ module.exports.load = async function (app, db) {
       }
 
       // Save to database
-      await db.set('eggs-config', newEggs);
-      await db.set('eggs-last-sync', new Date().toISOString());
+      await db.$transaction([
+        ...Object.entries(newEggs).map(([id, egg]) =>
+          db.eggConfig.upsert({
+            where: { id },
+            update: {
+              pterodactylNestId: egg.pterodactylNestId,
+              pterodactylEggId: egg.pterodactylEggId,
+              nestName: egg.nestName,
+              originalName: egg.originalName,
+              displayName: egg.displayName,
+              description: egg.description || '',
+              dockerImage: egg.dockerImage,
+              startup: egg.startup,
+              environment: JSON.stringify(egg.environment || {}),
+              enabled: egg.enabled ?? false,
+              categoryId: egg.category,
+              minimum: JSON.stringify(egg.minimum || {}),
+              maximum: egg.maximum ? JSON.stringify(egg.maximum) : '{}',
+              packages: JSON.stringify(egg.packages || []),
+              featureLimits: JSON.stringify(egg.featureLimits || {}),
+              orderIndex: egg.order ?? 0,
+              lastSyncedAt: egg.lastSyncedAt ? new Date(egg.lastSyncedAt) : null
+            },
+            create: {
+              id,
+              pterodactylNestId: egg.pterodactylNestId,
+              pterodactylEggId: egg.pterodactylEggId,
+              nestName: egg.nestName,
+              originalName: egg.originalName,
+              displayName: egg.displayName,
+              description: egg.description || '',
+              dockerImage: egg.dockerImage,
+              startup: egg.startup,
+              environment: JSON.stringify(egg.environment || {}),
+              enabled: egg.enabled ?? false,
+              categoryId: egg.category,
+              minimum: JSON.stringify(egg.minimum || {}),
+              maximum: egg.maximum ? JSON.stringify(egg.maximum) : '{}',
+              packages: JSON.stringify(egg.packages || []),
+              featureLimits: JSON.stringify(egg.featureLimits || {}),
+              orderIndex: egg.order ?? 0,
+              lastSyncedAt: egg.lastSyncedAt ? new Date(egg.lastSyncedAt) : null
+            }
+          })
+        ),
+        db.heliactyl.upsert({
+          where: { key: 'eggs-last-sync' },
+          update: { value: JSON.stringify(new Date().toISOString()) },
+          create: { key: 'eggs-last-sync', value: JSON.stringify(new Date().toISOString()) }
+        })
+      ]);
+
 
       log(
         'eggs synced',
@@ -344,7 +455,23 @@ module.exports.load = async function (app, db) {
 
       eggs[eggId].updatedAt = new Date().toISOString();
 
-      await db.set('eggs-config', eggs);
+      const eggData = eggs[eggId];
+      await db.eggConfig.update({
+        where: { id: eggId },
+        data: {
+          enabled: eggData.enabled,
+          displayName: eggData.displayName,
+          categoryId: eggData.category,
+          minimum: JSON.stringify(eggData.minimum || {}),
+          maximum: eggData.maximum ? JSON.stringify(eggData.maximum) : '{}',
+          packages: JSON.stringify(eggData.packages || []),
+          featureLimits: JSON.stringify(eggData.featureLimits || {}),
+          orderIndex: eggData.order ?? 0,
+          dockerImage: eggData.dockerImage,
+          startup: eggData.startup,
+          environment: JSON.stringify(eggData.environment || {})
+        }
+      });
 
       log(
         'egg updated',
@@ -381,7 +508,10 @@ module.exports.load = async function (app, db) {
       eggs[eggId].enabled = !eggs[eggId].enabled;
       eggs[eggId].updatedAt = new Date().toISOString();
 
-      await db.set('eggs-config', eggs);
+      await db.eggConfig.update({
+        where: { id: eggId },
+        data: { enabled: eggs[eggId].enabled }
+      });
 
       log(
         'egg toggled',
@@ -436,7 +566,19 @@ module.exports.load = async function (app, db) {
         updatedCount++;
       }
 
-      await db.set('eggs-config', eggs);
+      await db.$transaction(
+        eggIds.filter(id => eggs[id]).map(id => {
+          const egg = eggs[id];
+          return db.eggConfig.update({
+            where: { id },
+            data: {
+              enabled: egg.enabled,
+              categoryId: egg.category,
+              minimum: JSON.stringify(egg.minimum || {})
+            }
+          });
+        })
+      );
 
       log(
         'eggs batch updated',
@@ -452,6 +594,7 @@ module.exports.load = async function (app, db) {
       res.status(500).json({ error: 'Failed to batch update eggs' });
     }
   });
+
 
   // ============================================
   // CATEGORY MANAGEMENT
@@ -501,7 +644,11 @@ module.exports.load = async function (app, db) {
         order: order ?? categories.length
       });
 
-      await db.set('eggs-categories', categories);
+      await db.eggCategory.upsert({
+        where: { id },
+        update: { name, icon: icon || 'folder', orderIndex: order ?? categories.length },
+        create: { id, name, icon: icon || 'folder', orderIndex: order ?? categories.length }
+      });
 
       log(
         'category created',
@@ -517,6 +664,7 @@ module.exports.load = async function (app, db) {
       res.status(500).json({ error: 'Failed to create category' });
     }
   });
+
 
   /**
    * PATCH /api/admin/eggs/categories/:id
@@ -543,7 +691,16 @@ module.exports.load = async function (app, db) {
         }
       }
 
-      await db.set('eggs-categories', categories);
+      const updatedCategory = categories[categoryIndex];
+      await db.eggCategory.update({
+        where: { id: categoryId },
+        data: {
+          name: updatedCategory.name,
+          icon: updatedCategory.icon,
+          orderIndex: updatedCategory.order
+        }
+      });
+
 
       log(
         'category updated',
@@ -584,18 +741,16 @@ module.exports.load = async function (app, db) {
       }
 
       const deletedCategory = categories[categoryIndex];
-      categories.splice(categoryIndex, 1);
 
-      // Move eggs from deleted category to 'other'
-      const eggs = await getEggsFromDB(db);
-      for (const eggId of Object.keys(eggs)) {
-        if (eggs[eggId].category === categoryId) {
-          eggs[eggId].category = 'other';
-        }
-      }
-
-      await db.set('eggs-categories', categories);
-      await db.set('eggs-config', eggs);
+      await db.$transaction([
+        db.eggConfig.updateMany({
+          where: { categoryId },
+          data: { categoryId: 'other' }
+        }),
+        db.eggCategory.delete({
+          where: { id: categoryId }
+        })
+      ]);
 
       log(
         'category deleted',

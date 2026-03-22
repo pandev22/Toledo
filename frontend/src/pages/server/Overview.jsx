@@ -1,28 +1,6 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { useParams } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
-import {
-  Terminal, Power, RotateCw, Square, Cpu, MemoryStick,
-  HardDrive, Network, Server, Upload, Database, RefreshCw,
-  Clock, Shield, Download, AlertTriangle, CheckCircle2,
-  X, XCircle, Info, Loader2, AlertCircle, Copy, ChevronDown, InfoIcon
-} from 'lucide-react';
-import {
-  LineChart, Line, XAxis, YAxis, Tooltip as RechartsTooltip,
-  ResponsiveContainer, Area, AreaChart
-} from 'recharts';
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger
-} from "@/components/ui/popover";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -31,7 +9,46 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger
+} from "@/components/ui/popover";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { useToast } from "@/hooks/use-toast";
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import axios from "axios";
+import {
+  AlertTriangle,
+  ChevronDown,
+  Clock,
+  Copy,
+  Cpu,
+  HardDrive,
+  InfoIcon,
+  Loader2,
+  MemoryStick,
+  Network,
+  Power,
+  RefreshCw,
+  RotateCw,
+  Server,
+  Square,
+  Terminal,
+  Upload
+} from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { useParams } from 'react-router-dom';
+import {
+  Area, AreaChart,
+  Line,
+  LineChart,
+  Tooltip as RechartsTooltip,
+  ResponsiveContainer,
+  XAxis, YAxis
+} from 'recharts';
 import ConnectionOverlay from '../../components/ConnectionOverlay';
 
 const RETRY_COUNT = 5;
@@ -42,70 +59,6 @@ const CHART_COLORS = {
   memory: '#3B82F6',
   disk: '#A855F7',
   network: '#F59E0B'
-};
-
-// Custom Notification Component
-const NotificationContainer = ({ notifications, removeNotification }) => (
-  <div className="fixed top-4 right-4 z-50 flex flex-col gap-2 max-w-md w-full">
-    {notifications.map((notification) => (
-      <div
-        key={notification.id}
-        className={`
-          rounded-lg backdrop-blur shadow-lg p-4 pr-10 relative animate-in slide-in-from-right-5
-          ${notification.type === 'success' ? 'bg-green-500/10 backdrop-blur-lg border border-green-500/20 text-green-500' : ''}
-          ${notification.type === 'error' ? 'bg-red-500/10 backdrop-blur-lg border border-red-500/20 text-red-500' : ''}
-          ${notification.type === 'warning' ? 'bg-yellow-500/10 backdrop-blur-lg border border-yellow-500/20 text-yellow-500' : ''}
-          ${notification.type === 'info' ? 'bg-blue-500/10 backdrop-blur-lg border border-blue-500/20 text-blue-500' : ''}
-        `}
-      >
-        <div className="flex items-start gap-3">
-          {notification.type === 'success' && <CheckCircle2 className="h-5 w-5 mt-0.5" />}
-          {notification.type === 'error' && <XCircle className="h-5 w-5 mt-0.5" />}
-          {notification.type === 'warning' && <AlertTriangle className="h-5 w-5 mt-0.5" />}
-          {notification.type === 'info' && <Info className="h-5 w-5 mt-0.5" />}
-          <div className="flex-1">
-            {notification.title && (
-              <h4 className="font-medium mb-1">{notification.title}</h4>
-            )}
-            <p className="text-sm opacity-90">{notification.message}</p>
-          </div>
-        </div>
-        <button
-          onClick={() => removeNotification(notification.id)}
-          className="absolute top-4 right-4 opacity-70 hover:opacity-100 transition-opacity"
-        >
-          <X className="h-4 w-4" />
-        </button>
-      </div>
-    ))}
-  </div>
-);
-
-// Custom notification hook
-const useNotifications = () => {
-  const [notifications, setNotifications] = useState([]);
-  const notificationId = useRef(0);
-
-  const addNotification = useCallback((type, message, title = null, duration = 5000) => {
-    const id = notificationId.current++;
-    setNotifications(prev => [...prev, { id, type, message, title, timestamp: Date.now() }]);
-
-    if (duration) {
-      setTimeout(() => {
-        setNotifications(prev => prev.filter(notification => notification.id !== id));
-      }, duration);
-    }
-  }, []);
-
-  const removeNotification = useCallback((id) => {
-    setNotifications(prev => prev.filter(notification => notification.id !== id));
-  }, []);
-
-  return {
-    notifications,
-    addNotification,
-    removeNotification
-  };
 };
 
 const ResourceChart = ({ data, dataKey, color, label, unit = "", domain }) => (
@@ -171,6 +124,29 @@ const formatNetworkSpeed = (kbps) => {
     return `${(kbps / 1024).toFixed(2)} MB/s`;
   }
   return `${kbps.toFixed(2)} KB/s`;
+};
+
+const stripAnsiRegex = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, 'g');
+
+const formatCompactDuration = (ms) => {
+  if (ms === null || ms === undefined) {
+    return 'N/A';
+  }
+
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const days = Math.floor(totalSeconds / 86400);
+  const hours = Math.floor((totalSeconds % 86400) / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+
+  if (days > 0) {
+    return `${days}j ${hours}h`;
+  }
+
+  if (hours > 0) {
+    return `${hours}h ${minutes}m`;
+  }
+
+  return `${minutes}m`;
 };
 
 const NetworkChart = ({ data }) => (
@@ -270,118 +246,53 @@ const ResourceStat = ({ icon: Icon, title, value, secondaryValue, chartData, dat
 );
 
 const formatConsoleOutput = (line) => {
-  let processedLine = line;
+  return String(line || '')
+    .replace(/\[m/g, '')
+    .replace(/You need to agree to the EULA in order to run the server/gi, 'You need to agree to the EULA to run the server. Please check the dialog above.')
+    .replace(/container@pterodactyl~/g, 'container')
+    .replace(/\[Pterodactyl Daemon\]:/g, 'kryptond')
+    .replace(/Checking server disk space usage, this could take a few seconds\.\.\./g, 'Checking things, hold on...')
+    .replace(/Updating process configuration files\.\.\./g, 'This might take a while. One moment.')
+    .replace(/Ensuring file permissions are set correctly, this could take a few seconds\.\.\./g, "All checks completed. We're good to go.")
+    .replace(/Pulling Docker container image, this could take a few minutes to complete\.\.\./g, 'Updating Cargo on-the-fly...')
+    .replace(/Finished pulling Docker container image/g, 'All done!')
+    .replace(stripAnsiRegex, '')
+    .replace(/\[0;39m/g, '')
+    .trimEnd();
+};
 
-  const replacements = [
-    // Handle [m reset marker
-    {
-      pattern: /\[m/g,
-      replacement: '</span>'
-    },
-    // EULA message
-    {
-      pattern: /You need to agree to the EULA in order to run the server/i,
-      replacement: '<span class="text-yellow-500 font-mono">You need to agree to the EULA to run the server. Please check the dialog above.</span>'
-    },
-    // Timestamp and log level brackets
-    {
-      pattern: /(\[\d{2}:\d{2}:\d{2}\s*[A-Z]*\])/g,
-      replacement: '<span class="text-neutral-400 font-mono">$1</span>'
-    },
-    // Log levels
-    {
-      pattern: /(ERROR|WARN|INFO|DEBUG)/g,
-      replacement: (match) => {
-        const colors = {
-          ERROR: 'text-red-300',
-          WARN: 'text-yellow-300',
-          INFO: 'text-blue-300',
-          DEBUG: 'text-neutral-400'
-        };
-        return `<span class="font-mono ${colors[match]}">${match}</span>`;
-      }
-    },
-    // Replace container@pterodactyl with badge
-    {
-      pattern: /container@pterodactyl~/g,
-      replacement: '<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-normal bg-[#101218] text-white/80 shadow border border-white/10">container</span>'
-    },
-    // Replace [Piledriver]: with badge
-    {
-      pattern: /\[Pterodactyl Daemon\]:/g,
-      replacement: '<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-normal bg-[#101218] text-white/80 shadow border border-white/10">kryptond</span>'
-    },
-    // Replace specific Piledriver messages with more direct ones
-    {
-      pattern: /Checking server disk space usage, this could take a few seconds\.\.\./g,
-      replacement: 'Checking things, hold on...'
-    },
-    {
-      pattern: /Updating process configuration files\.\.\./g,
-      replacement: 'This might take a while. One moment.'
-    },
-    {
-      pattern: /Ensuring file permissions are set correctly, this could take a few seconds\.\.\./g,
-      replacement: 'All checks completed. We\'re good to go.'
-    },
-    {
-      pattern: /Pulling Docker container image, this could take a few minutes to complete\.\.\./g,
-      replacement: 'Updating Cargo on-the-fly...'
-    },
-    {
-      pattern: /Finished pulling Docker container image/g,
-      replacement: 'All done!'
-    },
-    // Plugin names in brackets
-    {
-      pattern: /\[([\w\s]+)\]/g,
-      replacement: '<span class="text-neutral-400 font-mono">[$1]</span>'
-    },
-    // Clean up any residual color codes
-    {
-      pattern: /\u001b\[\d+(?:;\d+)*m/g,
-      replacement: ''
-    }
-  ];
+const getConsoleLineClassName = (line) => {
+  const normalized = String(line || '').toLowerCase();
 
-  for (const { pattern, replacement } of replacements) {
-    processedLine = processedLine.replace(pattern, replacement);
+  if (normalized.includes('error')) {
+    return 'text-red-300';
   }
 
-  // Handle ANSI color codes after other replacements
-  processedLine = processedLine
-    .replace(/\u001b\[(\d+)m/g, (match, code) => {
-      const colors = {
-        31: 'text-red-500',     // Red
-        32: 'text-green-500',   // Green
-        33: 'text-yellow-500',  // Yellow
-        34: 'text-neutral-400', // Blue -> Gray
-        35: 'text-purple-500',  // Purple
-        36: 'text-cyan-500',    // Cyan
-        37: 'text-white',       // White
-        '31;1': 'text-red-500 font-bold',
-        '32;1': 'text-green-500 font-bold',
-        '33;1': 'text-yellow-500 font-bold',
-        '34;1': 'text-neutral-400 font-bold',
-        '36;1': 'text-cyan-500 font-bold'
-      };
-      return `<span class="font-mono ${colors[code] || ''}">`;
-    })
-    .replace(/\u001b\[0m/g, '</span>')
-    .replace(/\[0;39m/g, '</span>')
-    .replace(/\n/g, '<br>');
+  if (normalized.includes('warn')) {
+    return 'text-yellow-300';
+  }
 
-  // Ensure the entire line is monospaced, including colored text
-  return `<div class="font-mono">${processedLine}</div>`;
+  if (normalized.includes('info')) {
+    return 'text-blue-300';
+  }
+
+  if (normalized.includes('debug')) {
+    return 'text-neutral-400';
+  }
+
+  return 'text-neutral-200';
 };
 
 export default function ConsolePage() {
   const isFirstStateUpdate = useRef(true);
   const { id } = useParams();
+  const queryClient = useQueryClient();
   const socketRef = useRef(null);
+  const { toast } = useToast();
   const [serverState, setServerState] = useState("offline");
   const [isInstalling, setIsInstalling] = useState(false);
   const [consoleLines, setConsoleLines] = useState([]);
+  const consoleLineId = useRef(0);
   const [command, setCommand] = useState("");
   const [commandHistory, setCommandHistory] = useState([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
@@ -390,6 +301,7 @@ export default function ConsolePage() {
   const [installationProgress, setInstallationProgress] = useState(null);
   const [autoScroll, setAutoScroll] = useState(true);
   const [copySuccess, setCopySuccess] = useState(false);
+  const [now, setNow] = useState(Date.now());
   const [resourceHistory, setResourceHistory] = useState({
     cpu: [],
     memory: [],
@@ -407,7 +319,6 @@ export default function ConsolePage() {
 
   const scrollAreaRef = useRef(null);
   const mounted = useRef(true);
-  const { notifications, addNotification, removeNotification } = useNotifications();
 
   const { data: userData } = useQuery({
     queryKey: ['user'],
@@ -425,6 +336,76 @@ export default function ConsolePage() {
     }
   });
 
+  const { data: renewalStatus, error: renewalError, isLoading: isRenewalLoading } = useQuery({
+    queryKey: ['server', id, 'renewal'],
+    queryFn: async () => {
+      try {
+        const { data } = await axios.get(`/api/server/${id}/renewal/status`);
+        return data;
+      } catch (error) {
+        if (error?.response?.status === 404) {
+          return null;
+        }
+
+        throw error;
+      }
+    },
+    refetchInterval: 30000,
+    retry: 1,
+    enabled: Boolean(id)
+  });
+
+  const renewServer = useMutation({
+    mutationFn: async () => {
+      const { data } = await axios.post(`/api/server/${id}/renewal/renew`);
+      return data;
+    },
+    onSuccess: async (data) => {
+      await queryClient.invalidateQueries(['server', id, 'renewal']);
+      toast({
+        title: 'Renewal complete',
+        description: data?.restarted
+          ? 'Server renewed and restarted.'
+          : 'Server renewed successfully.'
+      });
+    },
+    onError: (error) => {
+      toast({
+        title: 'Renewal failed',
+        description: error?.response?.data?.error || 'Unable to renew this server right now.',
+        variant: 'destructive'
+      });
+    }
+  });
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setNow(Date.now());
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, []);
+
+  const renewalNextAt = renewalStatus?.nextRenewalAt ? new Date(renewalStatus.nextRenewalAt).getTime() : null;
+  const renewalDeleteAt = renewalStatus?.autoDeleteAt ? new Date(renewalStatus.autoDeleteAt).getTime() : null;
+  const renewalMsRemaining = renewalNextAt === null ? null : renewalNextAt - now;
+  const autoDeleteMsRemaining = renewalDeleteAt === null ? null : renewalDeleteAt - now;
+  const renewalWindowMs = (renewalStatus?.config?.renewalWindowHours || 0) * 60 * 60 * 1000;
+  const renewalExpired = renewalMsRemaining !== null && renewalMsRemaining <= 0;
+  const renewalCanRenew = Boolean(
+    renewalStatus?.config?.enabled &&
+    renewalMsRemaining !== null &&
+    renewalMsRemaining <= renewalWindowMs
+  );
+  const renewalStatusBadge = !renewalStatus?.config?.enabled
+    ? { label: 'Disabled', className: 'bg-neutral-700/40 text-neutral-200 border-neutral-600/60' }
+    : renewalExpired
+      ? { label: 'Expired', className: 'bg-red-500/15 text-red-200 border-red-500/30' }
+      : renewalCanRenew
+        ? { label: 'Renew now', className: 'bg-amber-500/15 text-amber-200 border-amber-500/30' }
+        : { label: 'Active', className: 'bg-emerald-500/15 text-emerald-200 border-emerald-500/30' };
+  const showRenewalCard = isRenewalLoading || Boolean(renewalStatus) || Boolean(renewalError);
+
   const writeFile = async (path, content) => {
     try {
       const response = await fetch(`/api/server/${id}/files/write?file=${encodeURIComponent(path)}`, {
@@ -435,14 +416,14 @@ export default function ConsolePage() {
       if (!response.ok) throw new Error(`Failed to write file: ${response.statusText}`);
       return true;
     } catch (error) {
-      addNotification('error', `Failed to write to ${path}: ${error.message}`);
+      toast({ title: "Error", description: `Failed to write to ${path}: ${error.message}`, variant: "destructive" });
       return false;
     }
   };
 
   const handleAcceptEula = async () => {
     if (await writeFile('eula.txt', 'eula=true')) {
-      addNotification('success', 'EULA accepted successfully');
+      toast({ title: "Success", description: "EULA accepted successfully" });
       setShowEulaDialog(false);
       socketRef.current?.send(JSON.stringify({
         event: 'set state',
@@ -450,6 +431,18 @@ export default function ConsolePage() {
       }));
     }
   };
+
+  const refreshToken = useCallback(async () => {
+    try {
+      const { data } = await axios.get(`/api/server/${id}/websocket`);
+      socketRef.current?.send(JSON.stringify({
+        event: "auth",
+        args: [data.data.token]
+      }));
+    } catch (error) {
+      toast({ title: "Connection Error", description: "Failed to refresh connection token", variant: "destructive" });
+    }
+  }, [id, toast]);
 
   const handleWebSocketMessage = useCallback((event) => {
     if (!mounted.current) return;
@@ -464,13 +457,19 @@ export default function ConsolePage() {
           break;
 
         case 'console output':
-          setConsoleLines(prev => [...prev.slice(-1000), message.args[0]]);
+          setConsoleLines(prev => [
+            ...prev.slice(-1000),
+            {
+              id: consoleLineId.current++,
+              content: message.args[0]
+            }
+          ]);
           if (message.args[0].toLowerCase().includes('agree to the eula')) {
             setShowEulaDialog(true);
           }
           break;
 
-        case 'stats':
+        case 'stats': {
           const statsData = JSON.parse(message.args[0]);
           if (!statsData || !mounted.current) return;
 
@@ -486,16 +485,18 @@ export default function ConsolePage() {
             uptime: statsData.uptime || "0h 00m 0s"
           }));
           break;
+        }
 
-        case 'status':
+        case 'status': {
           const newState = message.args[0];
           setServerState(newState);
           setIsInstalling(message.args[1]?.is_installing || false);
           break;
+        }
 
         case 'install started':
           setInstallationProgress({ status: 'started', message: 'Installation started...' });
-          addNotification('info', 'Server installation started');
+          toast({ title: "Info", description: "Server installation started" });
           break;
 
         case 'install output':
@@ -507,12 +508,12 @@ export default function ConsolePage() {
 
         case 'install completed':
           setInstallationProgress({ status: 'completed', message: 'Installation completed successfully' });
-          addNotification('success', 'Server installation completed successfully');
+          toast({ title: "Success", description: "Server installation completed successfully" });
           setIsInstalling(false);
           break;
 
         case 'token expired':
-          addNotification('warning', 'Your session has expired. Reconnecting...', 'Session Expired');
+          toast({ title: "Session Expired", description: "Your session has expired. Reconnecting...", variant: "warning" });
           break;
 
         case 'token expiring':
@@ -520,29 +521,17 @@ export default function ConsolePage() {
           break;
 
         case 'daemon error':
-          addNotification('error', message.args[0], 'Daemon Error');
+          toast({ title: "Daemon Error", description: message.args[0], variant: "destructive" });
           break;
 
         case 'jwt error':
-          addNotification('error', message.args[0], 'Authentication Error');
+          toast({ title: "Authentication Error", description: message.args[0], variant: "destructive" });
           break;
       }
     } catch (error) {
       // Silently ignore WebSocket errors to avoid console spam
     }
-  }, [addNotification]);
-
-  const refreshToken = async () => {
-    try {
-      const { data } = await axios.get(`/api/server/${id}/websocket`);
-      socketRef.current?.send(JSON.stringify({
-        event: "auth",
-        args: [data.data.token]
-      }));
-    } catch (error) {
-      addNotification('error', 'Failed to refresh connection token', 'Connection Error');
-    }
-  };
+  }, [refreshToken, toast]);
 
   const copyToClipboard = async (text) => {
     try {
@@ -622,7 +611,7 @@ export default function ConsolePage() {
 
         socketRef.current = ws;
       } catch (error) {
-        addNotification('error', 'Failed to connect to server', 'Connection Error');
+        toast({ title: "Connection Error", description: "Failed to connect to server", variant: "destructive" });
         // Keep connecting state for a bit to show the error
         setTimeout(() => {
           if (mounted.current) setIsConnecting(false);
@@ -639,10 +628,14 @@ export default function ConsolePage() {
         socketRef.current = null;
       }
     };
-  }, [id, retryCount, handleWebSocketMessage, addNotification]);
+  }, [id, retryCount, handleWebSocketMessage, toast]);
 
   // Auto-scroll effect
   useEffect(() => {
+    if (!consoleLines.length) {
+      return;
+    }
+
     if (autoScroll && scrollAreaRef.current) {
       const scrollContainer = scrollAreaRef.current.querySelector('[data-radix-scroll-area-viewport]');
       if (scrollContainer) {
@@ -654,7 +647,7 @@ export default function ConsolePage() {
         }, 0);
       }
     }
-  }, [consoleLines, autoScroll]);
+  }, [consoleLines.length, autoScroll]);
 
   const handleScroll = useCallback((event) => {
     const container = event.currentTarget;
@@ -709,18 +702,15 @@ export default function ConsolePage() {
       }));
     }
   };
-  // Update this helper function for better uptime calculation
+
   const formatUptime = (uptime) => {
-    // First check if it's already a formatted string
     if (typeof uptime === 'string' && (uptime.includes('h') || uptime.includes('m'))) {
       return uptime;
     }
 
-    // Try to parse as a number if it's a string
     let seconds = 0;
 
     if (typeof uptime === 'string') {
-      // Try to parse as number
       const parsed = parseInt(uptime, 10);
       if (!isNaN(parsed)) {
         seconds = parsed;
@@ -729,29 +719,19 @@ export default function ConsolePage() {
       seconds = uptime;
     }
 
-    // If uptime is jumping by ~18 minutes every second, it might be reporting in deciseconds (1/10th of a second)
-    // Or it could be milliseconds (which would be 16.7 minutes per second)
-
-    // Let's try to detect the most likely time unit based on the magnitude
     if (seconds > 1000) {
-      // If value is very large, it's likely milliseconds
       seconds = Math.round(seconds / 1000);
     } else if (seconds > 100) {
-      // If the value is moderately large but not huge, it might be deciseconds
       seconds = Math.round(seconds / 10);
     }
 
-    // Calculate hours, minutes, seconds
     const hours = Math.floor(seconds / 3600);
     const minutes = Math.floor((seconds % 3600) / 60);
     const secs = Math.floor(seconds % 60);
 
-    // Format with leading zeros for better readability
     return `${hours}h ${minutes.toString().padStart(2, '0')}m ${secs.toString().padStart(2, '0')}s`;
   };
 
-
-  // Loading state
   if (!server) {
     return (
       <div className="flex flex-col items-center justify-center min-h-[400px] gap-2">
@@ -765,7 +745,6 @@ export default function ConsolePage() {
     );
   }
 
-  // Error state
   if (serverError) {
     return (
       <div className="flex items-center justify-center min-h-[400px] text-red-400">
@@ -776,11 +755,6 @@ export default function ConsolePage() {
 
   return (
     <div className="space-y-6 p-6">
-      <NotificationContainer
-        notifications={notifications}
-        removeNotification={removeNotification}
-      />
-
       {/* Server Header with updated status badge */}
       <div className="flex justify-between items-center">
         <div className="flex items-center gap-4">
@@ -841,7 +815,6 @@ export default function ConsolePage() {
                   variant="outline"
                   size="icon"
                   onClick={() => {
-                    // Send kill command if server is in a transitional state
                     const action = ['starting', 'stopping'].includes(serverState) ? 'kill' : 'stop';
                     sendPowerAction(action);
                   }}
@@ -859,7 +832,6 @@ export default function ConsolePage() {
       </div>
       {isConnecting && <ConnectionOverlay />}
 
-      {/* Replace the existing Card after the Server Header with this */}
       <div className="flex items-center gap-6 p-4 rounded-lg border border-white/5">
         <div className="flex items-center gap-2">
           <Server className="w-4 h-4 text-neutral-400" />
@@ -957,76 +929,147 @@ export default function ConsolePage() {
       </div>
 
       <div>
-        <div>
-          {/* Console with Empty State - Fixed Vertical Centering */}
-          <Card>
-            <CardContent className="p-0">
-              <ScrollArea
-                ref={scrollAreaRef}
-                className="h-[440px] font-mono text-sm bg-transparent"
-                onScroll={handleScroll}
-              >
-                {consoleLines.length > 0 ? (
-                  <div className="p-4">
-                    {consoleLines.map((line, i) => (
-                      <div
-                        key={i}
-                        className="py-0.5"
-                        dangerouslySetInnerHTML={{ __html: formatConsoleOutput(line) }}
-                      />
-                    ))}
-                  </div>
-                ) : (
-                  <div className="h-full flex items-center justify-center">
-                    <div className="flex flex-col items-center justify-center text-center p-6">
-                      <div className="bg-white/5 p-4 rounded-full mb-4 mt-8">
-                        <Terminal className="h-8 w-8 text-neutral-400" />
-                      </div>
-                      <h3 className="text-lg font-medium text-white mb-2">Hm... there's nothing here</h3>
-                      <p className="text-neutral-400 max-w-md">
-                        {serverState === 'offline'
-                          ? 'Start your server to see console output here'
-                          : 'Waiting for console output...'}
-                      </p>
-                      {serverState === 'offline' && (
-                        <Button
-                          variant="outline"
-                          className="mt-4"
-                          onClick={() => sendPowerAction('start')}
-                          disabled={isInstalling}
-                        >
-                          <Power className="w-4 h-4 mr-2" />
-                          Start server
-                        </Button>
-                      )}
+        <Card>
+          <CardContent className="p-0">
+            <ScrollArea
+              ref={scrollAreaRef}
+              className="h-[440px] font-mono text-sm bg-transparent"
+              onScroll={handleScroll}
+            >
+              {consoleLines.length > 0 ? (
+                <div className="p-4">
+                  {consoleLines.map((line) => (
+                    <div
+                      key={line.id}
+                      className={`py-0.5 font-mono whitespace-pre-wrap break-words ${getConsoleLineClassName(line.content)}`}
+                    >
+                      {formatConsoleOutput(line.content)}
                     </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="h-full flex items-center justify-center">
+                  <div className="flex flex-col items-center justify-center text-center p-6">
+                    <div className="bg-white/5 p-4 rounded-full mb-4 mt-8">
+                      <Terminal className="h-8 w-8 text-neutral-400" />
+                    </div>
+                    <h3 className="text-lg font-medium text-white mb-2">Hm... there's nothing here</h3>
+                    <p className="text-neutral-400 max-w-md">
+                      {serverState === 'offline'
+                        ? 'Start your server to see console output here'
+                        : 'Waiting for console output...'}
+                    </p>
+                    {serverState === 'offline' && (
+                      <Button
+                        variant="outline"
+                        className="mt-4"
+                        onClick={() => sendPowerAction('start')}
+                        disabled={isInstalling}
+                      >
+                        <Power className="w-4 h-4 mr-2" />
+                        Start server
+                      </Button>
+                    )}
                   </div>
-                )}
-              </ScrollArea>
-              <div className="p-4 border-t border-white/10">
-                <form onSubmit={sendCommand} className="flex gap-2">
-                  <Input
-                    value={command}
-                    onChange={(e) => setCommand(e.target.value)}
-                    onKeyDown={handleKeyDown}
-                    placeholder={isInstalling ? "Console commands are disabled during installation..." : "Type a command..."}
-                    className="flex-1 bg-transparent border-white/10"
-                    disabled={isInstalling || serverState === 'offline'}
-                  />
-                  <Button
-                    type="submit"
-                    disabled={isInstalling || !command.trim() || serverState === 'offline'}
-                  >
-                    Send
-                  </Button>
-                </form>
-              </div>
-            </CardContent>
-          </Card>
-        </div>
+                </div>
+              )}
+            </ScrollArea>
+            <div className="p-4 border-t border-white/10">
+              <form onSubmit={sendCommand} className="flex gap-2">
+                <Input
+                  value={command}
+                  onChange={(e) => setCommand(e.target.value)}
+                  onKeyDown={handleKeyDown}
+                  placeholder={isInstalling ? "Console commands are disabled during installation..." : "Type a command..."}
+                  className="flex-1 bg-transparent border-white/10"
+                  disabled={isInstalling || serverState === 'offline'}
+                />
+                <Button
+                  type="submit"
+                  disabled={isInstalling || !command.trim() || serverState === 'offline'}
+                >
+                  Send
+                </Button>
+              </form>
+            </div>
+          </CardContent>
+        </Card>
       </div>
 
-{/* Resource Stats Grid */}
+      {showRenewalCard ? <Card className="overflow-hidden border-neutral-800 bg-gradient-to-br from-[#111111] via-[#111111] to-[#171717]">
+        <CardHeader className="pb-4">
+          <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+            <div className="space-y-1">
+              <div className="flex items-center gap-2">
+                <Clock className="h-4 w-4 text-neutral-400" />
+                <CardTitle>Server renewal</CardTitle>
+              </div>
+              <CardDescription>
+                Track the next renewal and avoid automatic deletion after expiry.
+              </CardDescription>
+            </div>
+            <Badge variant="outline" className={renewalStatusBadge.className}>
+              {renewalStatusBadge.label}
+            </Badge>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {isRenewalLoading ? (
+            <div className="flex items-center gap-3 rounded-lg border border-white/10 bg-white/[0.03] p-4 text-sm text-neutral-300">
+              <RefreshCw className="h-4 w-4 animate-spin text-neutral-400" />
+              Loading renewal status...
+            </div>
+          ) : renewalError ? (
+            <div className="flex items-start gap-3 rounded-lg border border-red-500/20 bg-red-500/10 p-4 text-sm text-red-100">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+              <div>
+                <p className="font-medium">Unable to load renewal status.</p>
+                <p className="mt-1 text-red-100/80">
+                  {renewalError?.response?.data?.error || 'Renewal status is temporarily unavailable.'}
+                </p>
+              </div>
+            </div>
+          ) : renewalStatus ? (
+            <>
+              <div className="flex flex-col gap-3 rounded-lg border border-white/8 bg-black/20 p-4 md:flex-row md:items-center md:justify-between">
+                <div className="space-y-1">
+                  <p className="text-sm font-medium text-white">
+                    {renewalStatus.nextRenewalAt
+                      ? `Next renewal: ${new Date(renewalStatus.nextRenewalAt).toLocaleString()}`
+                      : 'Next renewal: not scheduled'}
+                  </p>
+                  <p className="text-sm text-neutral-400">
+                    {renewalExpired
+                      ? `Expired for ${formatCompactDuration(Math.abs(renewalMsRemaining || 0))}`
+                      : `Time left: ${formatCompactDuration(renewalMsRemaining)}`} · Auto delete {renewalStatus.config.autoDeleteEnabled
+                      ? `after ${renewalStatus.config.autoDeleteAfterDays} days`
+                      : 'disabled'} · Renew count {renewalStatus.renewalCount || 0}
+                  </p>
+                </div>
+
+                <Button
+                  onClick={() => renewServer.mutate()}
+                  disabled={!renewalCanRenew || renewServer.isPending}
+                  className="min-w-[180px]"
+                >
+                  {renewServer.isPending ? (
+                    <>
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Renewing...
+                    </>
+                  ) : (
+                    <>
+                      <RotateCw className="h-4 w-4" />
+                      Renew server
+                    </>
+                  )}
+                </Button>
+              </div>
+            </>
+          ) : null}
+        </CardContent>
+      </Card> : null}
+
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <ResourceStat
           icon={Cpu}
@@ -1073,7 +1116,6 @@ export default function ConsolePage() {
         />
       </div>
 
-      {/* EULA Dialog */}
       <Dialog open={showEulaDialog} onOpenChange={setShowEulaDialog}>
         <DialogContent>
           <DialogHeader>
@@ -1106,7 +1148,6 @@ export default function ConsolePage() {
         </DialogContent>
       </Dialog>
 
-      {/* Installation Progress Overlay */}
       {isInstalling && (
         <div className="fixed inset-0 bg-background/80 backdrop-blur-sm z-50 flex items-center justify-center">
           <Card className="w-full max-w-[400px]">

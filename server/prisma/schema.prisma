@@ -4,16 +4,294 @@ generator client {
 
 datasource db {
   provider = "sqlite"
-  url      = "file:./heliactyl.db"
+  url      = env("DATABASE_URL")
 }
 
+// ──────────────────────────────────────────────
+// Legacy KV table — kept for data migration only.
+// Remove after migration script has run.
+// ──────────────────────────────────────────────
 model heliactyl {
-  key        String  @id
+  key        String @id
   value      String
-  created_at Int?    @default(dbgenerated("(strftime('%s', 'now'))"))
+  created_at Int?   @default(dbgenerated("(strftime('%s', 'now'))"))
 }
 
 model keyv {
-  key        String  @id
-  value      String
+  key   String @id
+  value String
+}
+
+// ──────────────────────────────────────────────
+// V2 Relational Schema (15 models)
+// ──────────────────────────────────────────────
+
+model User {
+  id            String  @id @default(cuid())
+  email         String  @unique
+  username      String  @unique
+  password      String
+  pterodactylId Int?    @unique
+  discordId     String? @unique
+  pteroUsername  String?
+  discordAccessToken  String?
+  discordRefreshToken String?
+  passkeysEnabled     Boolean @default(false)
+
+  // Economy
+  coins       Int     @default(0)
+  creditUsd   Float   @default(0)
+  packageName String  @default("default")
+  sftpPassword String?
+
+  // Extra resources (purchased / earned)
+  extraRam     Int @default(0)
+  extraDisk    Int @default(0)
+  extraCpu     Int @default(0)
+  extraServers Int @default(0)
+
+  // Daily / Streak
+  currentStreak    Int     @default(0)
+  longestStreak    Int     @default(0)
+  lastClaimDate    String? // ISO-8601 date string
+  totalClaimed     Int     @default(0)
+  totalCoinsEarned Int     @default(0)
+  streakProtection Int     @default(0)
+
+  // 2FA
+  twoFactorEnabled Boolean   @default(false)
+  twoFactorSecret  String?
+  backupCodes      String?   // JSON-serialised string[]
+  twoFactorAt      DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  transactions    Transaction[]
+  notifications   Notification[]
+  authTokens      AuthToken[]
+  referralOwned   Referral?       @relation("ReferralOwner")
+  referralClaimed Referral?       @relation("ReferralClaimer")
+  boosts          Boost[]
+  stakes          Stake[]
+  subuserServers  SubuserServer[]
+  tickets         Ticket[]
+  ticketMessages  TicketMessage[]
+  passkeys        Passkey[]
+}
+
+model Transaction {
+  id          String   @id @default(cuid())
+  userId      String
+  type        String   // earn, spend, transfer_in, transfer_out, purchase, refund, stake, unstake, daily, afk, boost_purchase
+  amount      Int
+  description String
+  details     String?  // JSON — extra context (resource deltas, item names, etc.)
+  externalId  String?  @unique // Stripe payment ID, etc. for deduplication
+  createdAt   DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, type])
+  @@index([userId, createdAt])
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  action    String
+  name      String
+  read      Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, read])
+}
+
+model AuthToken {
+  id        String    @id @default(cuid())
+  userId    String
+  token     String    @unique
+  type      String    // reset, verify, api
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model Referral {
+  id          String    @id @default(cuid())
+  code        String    @unique
+  userId      String    @unique
+  claimedById String?   @unique
+  claimedAt   DateTime?
+  createdAt   DateTime  @default(now())
+
+  user      User  @relation("ReferralOwner", fields: [userId], references: [id], onDelete: Cascade)
+  claimedBy User? @relation("ReferralClaimer", fields: [claimedById], references: [id])
+}
+
+model Boost {
+  id           String    @id @default(cuid())
+  userId       String
+  serverId     String
+  serverName   String?
+  boostType    String    // ram, cpu, disk, combo
+  duration     String    // "1h", "6h", "12h", "24h"
+  durationMs   Int
+  price        Int
+  status       String    @default("pending") // pending, scheduled, active, expired, cancelled
+  scheduledFor DateTime?
+  appliedAt    DateTime?
+  expiresAt    DateTime?
+  memoryDelta  Int       @default(0)
+  cpuDelta     Int       @default(0)
+  diskDelta    Int       @default(0)
+  initialLimits String?  // JSON — snapshot of server limits before boost
+  createdAt    DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([status, expiresAt])
+  @@index([userId])
+}
+
+model Stake {
+  id             String    @id @default(cuid())
+  userId         String
+  planId         String
+  amount         Int
+  accruedRewards Float     @default(0)
+  lastRewardAt   DateTime  @default(now())
+  status         String    @default("active") // active, completed, cancelled
+  endTime        DateTime?
+  claimedAt      DateTime?
+  returnedAmount Int?
+  penalty        Float?
+  createdAt      DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([status, lastRewardAt])
+  @@index([userId])
+}
+
+model SubuserServer {
+  id         String  @id @default(cuid())
+  userId     String
+  serverId   String
+  serverName String?
+  ownerId    String?
+  source     String  // subuser, forced
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, serverId, source])
+  @@index([userId])
+}
+
+// ──────────────────────────────────────────────
+// Phase 4e — New models for remaining modules
+// ──────────────────────────────────────────────
+
+model Ticket {
+  id          String   @id @default(cuid())
+  userId      String
+  subject     String
+  description String
+  priority    String   @default("low")    // low, medium, high, urgent
+  category    String   @default("general") // technical, billing, general, abuse
+  status      String   @default("open")   // open, closed
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user     User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messages TicketMessage[]
+
+  @@index([userId])
+  @@index([status])
+}
+
+model TicketMessage {
+  id        String   @id @default(cuid())
+  ticketId  String
+  userId    String
+  content   String
+  isStaff   Boolean  @default(false)
+  isSystem  Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  ticket Ticket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([ticketId])
+}
+
+model Passkey {
+  id                  String   @id @default(cuid())
+  userId              String
+  name                String
+  credentialID        String   @unique
+  credentialPublicKey String
+  counter             Int      @default(0)
+  transports          String?  // JSON array e.g. ["internal","usb"]
+  createdAt           DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model EggConfig {
+  id                String  @id            // format: "nestId_eggId"
+  pterodactylNestId Int
+  pterodactylEggId  Int
+  nestName          String
+  originalName      String
+  displayName       String
+  description       String  @default("")
+  dockerImage       String
+  startup           String
+  environment       String  @default("{}") // JSON object
+  enabled           Boolean @default(true)
+  categoryId        String?
+  minimum           String  @default("{}") // JSON {ram,disk,cpu}
+  maximum           String  @default("{}") // JSON {ram,disk,cpu}
+  packages          String  @default("[]") // JSON array of package names
+  featureLimits     String  @default("{}") // JSON {databases,allocations,backups}
+  orderIndex        Int     @default(0)
+  lastSyncedAt      DateTime?
+
+  category EggCategory? @relation(fields: [categoryId], references: [id])
+
+  @@index([enabled])
+  @@index([categoryId])
+}
+
+model EggCategory {
+  id         String @id     // e.g. "minecraft"
+  name       String
+  icon       String @default("")
+  orderIndex Int    @default(0)
+
+  eggs EggConfig[]
+}
+
+model InstalledPlugin {
+  id            String   @id @default(cuid())
+  serverId      String
+  pluginId      String
+  name          String
+  pluginName    String
+  platform      String   // spigot, modrinth, manual
+  installedAt   DateTime @default(now())
+  manuallyAdded Boolean  @default(false)
+
+  @@unique([serverId, pluginId, platform])
+  @@index([serverId])
 }

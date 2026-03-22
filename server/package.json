@@ -6,6 +6,7 @@
   "author": "Matt James",
   "dependencies": {
     "@iarna/toml": "^2.2.5",
+    "@prisma/client": "^5.22.0",
     "@simplewebauthn/server": "^13.1.1",
     "axios": "^1.13.5",
     "bcrypt": "^5.1.1",
@@ -36,9 +37,10 @@
   "scripts": {
     "mono:build": "cd ../frontend && npm run build",
     "mono:watch": "cd ../frontend && npm run dev",
-    "db:build:macos": "cd Heliactyl Nextdb && cargo build --release && cp target/release/libHeliactyl Nextdb.dylib ../ffi/libHeliactyl Nextdb.dylib",
-    "db:build:linux": "cd Heliactyl Nextdb && cargo build --release && cp target/release/libHeliactyl Nextdb.so ../ffi/libHeliactyl Nextdb.so",
-    "db:build:windows": "cd Heliactyl Nextdb && cargo build --release && cp target/release/Heliactyl Nextdb.dll ../ffi/Heliactyl Nextdb.dll",
+    "prisma:generate": "npx prisma generate",
+    "prisma:migrate": "npx prisma migrate dev",
+    "prisma:push": "npx prisma db push",
+    "postinstall": "npx prisma generate",
     "start": "node --no-deprecation app.js"
   },
   "devDependencies": {
@@ -46,7 +48,6 @@
     "@babel/core": "^7.24.0",
     "@babel/plugin-transform-modules-commonjs": "^7.23.3",
     "@babel/preset-env": "^7.24.0",
-    "@prisma/client": "^5.22.0",
     "prisma": "^5.22.0"
   }
 }

@@ -1,24 +1,15 @@
-import React, { useState, useEffect } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import React, { useState } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useToast } from '@/hooks/use-toast';
+import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { Card, CardContent } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
-import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
 import { Textarea } from '@/components/ui/textarea';
 import { Pagination } from '@/components/Pagination';
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
 import {
   MessageSquare,
   Eye,
@@ -31,6 +22,7 @@ import {
   ArrowUpIcon,
   ArrowDownIcon
 } from 'lucide-react';
+import axios from 'axios';
 
 const StatsCard = ({ title, value, className }) => (
   <Card>
@@ -66,36 +58,51 @@ const StatusBadge = ({ status }) => (
 );
 
 const ViewTicketDialog = ({ isOpen, onClose, ticketId, onStatusChange }) => {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
   const [replyContent, setReplyContent] = useState('');
-  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const { data: ticket, refetch } = useQuery({
+  const { data: ticket } = useQuery({
     queryKey: ['ticket', ticketId],
     queryFn: async () => {
       const response = await fetch(`/api/tickets/${ticketId}`);
+      if (!response.ok) throw new Error('Failed to fetch ticket');
       return response.json();
     },
     enabled: !!ticketId
   });
 
-  const handleSubmitReply = async (e) => {
-    e.preventDefault();
-    setIsSubmitting(true);
-
-    try {
-      await fetch(`/api/tickets/${ticketId}/messages`, {
+  const replyMutation = useMutation({
+    mutationFn: async (content) => {
+      const response = await fetch(`/api/tickets/${ticketId}/messages`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: replyContent })
+        body: JSON.stringify({ content })
       });
-
+      if (!response.ok) throw new Error('Failed to send reply');
+      return response.json();
+    },
+    onSuccess: () => {
       setReplyContent('');
-      refetch();
-    } catch (error) {
-      console.error('Error sending reply:', error);
-    } finally {
-      setIsSubmitting(false);
+      queryClient.invalidateQueries({ queryKey: ['ticket', ticketId] });
+      toast({
+        title: "Success",
+        description: "Reply sent successfully",
+      });
+    },
+    onError: (error) => {
+      toast({
+        title: "Error",
+        description: error.message || "Failed to send reply",
+        variant: "destructive",
+      });
     }
+  });
+
+  const handleSubmitReply = (e) => {
+    e.preventDefault();
+    if (!replyContent.trim()) return;
+    replyMutation.mutate(replyContent);
   };
 
   if (!ticket) return null;
@@ -138,7 +145,7 @@ const ViewTicketDialog = ({ isOpen, onClose, ticketId, onStatusChange }) => {
                     : 'bg-[#4e5457] text-white border-[#5e6467] font-medium'
                   }
                 >
-                  {msg.isSystem ? 'System' : msg.isStaff ? 'Staff' : 'User'}
+                  {msg.isStaff ? 'Staff' : msg.isSystem ? 'System' : 'User'}
                 </Badge>
                 <span className="text-xs text-[#95a1ad]">
                   {new Date(msg.timestamp).toLocaleString()}
@@ -158,26 +165,38 @@ const ViewTicketDialog = ({ isOpen, onClose, ticketId, onStatusChange }) => {
               className="min-h-[100px] bg-[#202229] border-[#2e3337]/50 text-white placeholder:text-[#95a1ad]/50 resize-none"
             />
             <div className="flex justify-between">
-              <Button
-                type="button"
-                variant={ticket.status === 'open' ? 'destructive' : 'default'}
-                onClick={() => onStatusChange(ticket.id, ticket.status === 'open' ? 'closed' : 'open')}
-                className={ticket.status === 'open' 
-                  ? 'bg-red-500 hover:bg-red-600 text-white' 
-                  : 'bg-emerald-500 hover:bg-emerald-600 text-white'}
-              >
-                {ticket.status === 'open' ? (
-                  <><X className="w-4 h-4 mr-2" /> Close Ticket</>
-                ) : (
-                  <><RotateCcw className="w-4 h-4 mr-2" /> Reopen Ticket</>
-                )}
-              </Button>
+              {ticket.status === 'open' ? (
+                <ConfirmDialog
+                  title="Close Ticket"
+                  description="Are you sure you want to close this ticket?"
+                  onConfirm={() => onStatusChange(ticket.id, 'closed')}
+                  variant="destructive"
+                  trigger={
+                    <Button
+                      type="button"
+                      variant="destructive"
+                      className="bg-red-500 hover:bg-red-600 text-white"
+                    >
+                      <X className="w-4 h-4 mr-2" /> Close Ticket
+                    </Button>
+                  }
+                />
+              ) : (
+                <Button
+                  type="button"
+                  variant="default"
+                  onClick={() => onStatusChange(ticket.id, 'open')}
+                  className="bg-emerald-500 hover:bg-emerald-600 text-white"
+                >
+                  <RotateCcw className="w-4 h-4 mr-2" /> Reopen Ticket
+                </Button>
+              )}
               <Button 
                 type="submit" 
-                disabled={isSubmitting}
+                disabled={replyMutation.isPending}
                 className="bg-blue-500 hover:bg-blue-600 text-white"
               >
-                {isSubmitting ? (
+                {replyMutation.isPending ? (
                   <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
                 ) : (
                   <Save className="w-4 h-4 mr-2" />
@@ -222,6 +241,8 @@ const UpdatePriorityDialog = ({ isOpen, onClose, ticketId, onUpdate }) => {
 };
 
 export default function AdminSupportDashboard() {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
   const [filters, setFilters] = useState({
     search: '',
     priority: 'all',
@@ -293,31 +314,68 @@ export default function AdminSupportDashboard() {
 
   const filteredTickets = sortedTickets;
 
-  const handleStatusChange = async (ticketId, status) => {
-    try {
-      await fetch(`/api/tickets/${ticketId}/status`, {
+  const statusMutation = useMutation({
+    mutationFn: async ({ ticketId, status }) => {
+      const response = await fetch(`/api/tickets/${ticketId}/status`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status })
       });
-      refetchTickets();
-    } catch (error) {
-      console.error('Error updating ticket status:', error);
+      if (!response.ok) throw new Error('Failed to update status');
+      return response.json();
+    },
+    onSuccess: (_, { status }) => {
+      queryClient.invalidateQueries({ queryKey: ['tickets'] });
+      queryClient.invalidateQueries({ queryKey: ['ticket'] });
+      queryClient.invalidateQueries({ queryKey: ['ticket-stats'] });
+      toast({
+        title: "Success",
+        description: `Ticket ${status === 'closed' ? 'closed' : 'reopened'} successfully`,
+      });
+    },
+    onError: (error) => {
+      toast({
+        title: "Error",
+        description: error.message || "Failed to update status",
+        variant: "destructive",
+      });
     }
-  };
+  });
 
-  const handlePriorityUpdate = async (ticketId, priority) => {
-    try {
-      await fetch(`/api/tickets/${ticketId}/priority`, {
+  const priorityMutation = useMutation({
+    mutationFn: async ({ ticketId, priority }) => {
+      const response = await fetch(`/api/tickets/${ticketId}/priority`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ priority })
       });
-      refetchTickets();
+      if (!response.ok) throw new Error('Failed to update priority');
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['tickets'] });
+      queryClient.invalidateQueries({ queryKey: ['ticket'] });
+      toast({
+        title: "Success",
+        description: "Priority updated successfully",
+      });
       setPriorityUpdateTicketId(null);
-    } catch (error) {
-      console.error('Error updating priority:', error);
+    },
+    onError: (error) => {
+      toast({
+        title: "Error",
+        description: error.message || "Failed to update priority",
+        variant: "destructive",
+      });
     }
+  });
+
+  const handleStatusChange = (ticketId, status) => {
+    statusMutation.mutate({ ticketId, status });
+  };
+
+  const handlePriorityUpdate = (ticketId, priority) => {
+    priorityMutation.mutate({ ticketId, priority });
   };
 
   const exportTickets = async () => {
@@ -338,11 +396,11 @@ export default function AdminSupportDashboard() {
   };
 
   return (
-    <div className="space-y-6 p-6">
+    <div className="space-y-6 p-6 bg-[#1a1d21] min-h-screen">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
           <div>
-            <h1 className="text-2xl font-semibold">Support Tickets</h1>
+            <h1 className="text-2xl font-semibold text-white">Support Tickets</h1>
           </div>
         </div>
         <div className="flex items-center gap-4">
@@ -406,8 +464,8 @@ export default function AdminSupportDashboard() {
         </div>
 
         {/* Sort Controls */}
-        <div className="flex items-center gap-4 mt-4 pt-4 border-t">
-          <span className="text-sm text-gray-500">Sort by:</span>
+        <div className="flex items-center gap-4 mt-4 pt-4 border-t border-[#2e3337]">
+          <span className="text-sm text-gray-400">Sort by:</span>
           
           <Select
             value={filters.sortBy}
@@ -450,17 +508,17 @@ export default function AdminSupportDashboard() {
         <StatsCard
           title="Open Tickets"
           value={stats?.open || '-'}
-          className="text-emerald-600"
+          className="text-emerald-400"
         />
         <StatsCard
           title="Avg. Response Time"
           value={stats?.averageResponseTime ? `${Math.round(stats.averageResponseTime / 60000)}m` : '-'}
-          className="text-amber-600"
+          className="text-amber-400"
         />
         <StatsCard
           title="Last 7 Days"
           value={stats?.ticketsLastWeek || '-'}
-          className="text-blue-600"
+          className="text-blue-400"
         />
       </div>
 
@@ -468,27 +526,27 @@ export default function AdminSupportDashboard() {
         <div className="overflow-x-auto">
           <table className="w-full">
             <thead>
-              <tr className="border-b">
-                <th className="text-left p-4">Ticket</th>
-                <th className="text-left p-4">User</th>
-                <th className="text-left p-4">Category</th>
-                <th className="text-left p-4">Priority</th>
-                <th className="text-left p-4">Status</th>
-                <th className="text-center p-4">Actions</th>
+              <tr className="border-b border-[#2e3337]">
+                <th className="text-left p-4 text-gray-300">Ticket</th>
+                <th className="text-left p-4 text-gray-300">User</th>
+                <th className="text-left p-4 text-gray-300">Category</th>
+                <th className="text-left p-4 text-gray-300">Priority</th>
+                <th className="text-left p-4 text-gray-300">Status</th>
+                <th className="text-center p-4 text-gray-300">Actions</th>
               </tr>
             </thead>
             <tbody>
               {filteredTickets.map(ticket => (
-                <tr key={ticket.id} className="border-b">
+                <tr key={ticket.id} className="border-b border-[#2e3337]">
                   <td className="p-4">
                     <div>
-                      <div className="font-medium">{ticket.subject}</div>
-                      <div className="text-sm text-gray-500">#{ticket.id.slice(0, 8)}</div>
+                      <div className="font-medium text-white">{ticket.subject}</div>
+                      <div className="text-sm text-gray-400">#{ticket.id.slice(0, 8)}</div>
                     </div>
                   </td>
                   <td className="p-4">
-                    <div className="text-sm">{ticket.user.username}</div>
-                    <div className="text-xs text-gray-500">{ticket.user.email}</div>
+                    <div className="text-sm text-gray-200">{ticket.user.username}</div>
+                    <div className="text-xs text-gray-400">{ticket.user.email}</div>
                   </td>
                   <td className="p-4">
                     <Badge variant="outline" className="bg-[#202229] text-[#95a1ad] border-[#2e3337]/50">
@@ -517,20 +575,27 @@ export default function AdminSupportDashboard() {
                       >
                         <MoreHorizontal className="w-4 h-4" />
                       </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => handleStatusChange(
-                          ticket.id,
-                          ticket.status === 'open' ? 'closed' : 'open'
-                        )}
-                      >
-                        {ticket.status === 'open' ? (
-                          <X className="w-4 h-4 text-red-500" />
-                        ) : (
+                      {ticket.status === 'open' ? (
+                        <ConfirmDialog
+                          title="Close Ticket"
+                          description="Are you sure you want to close this ticket?"
+                          onConfirm={() => handleStatusChange(ticket.id, 'closed')}
+                          variant="destructive"
+                          trigger={
+                            <Button variant="ghost" size="sm">
+                              <X className="w-4 h-4 text-red-500" />
+                            </Button>
+                          }
+                        />
+                      ) : (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => handleStatusChange(ticket.id, 'open')}
+                        >
                           <RotateCcw className="w-4 h-4 text-emerald-500" />
-                        )}
-                      </Button>
+                        </Button>
+                      )}
                     </div>
                   </td>
                 </tr>
@@ -539,7 +604,6 @@ export default function AdminSupportDashboard() {
           </table>
         </div>
 
-        {/* Pagination */}
         <Pagination
           page={pagination.page}
           totalPages={pagination.totalPages}

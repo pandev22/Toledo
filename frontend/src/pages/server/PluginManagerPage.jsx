@@ -9,7 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import {
   Download, Search, RefreshCw, Star, Loader2, Gem,
   Filter, ExternalLink, Package, Check, Info,
-  CheckCircle2, AlertCircle, X
+  CheckCircle2, AlertCircle, X, Trash, MoreHorizontal
 } from 'lucide-react';
 
 import {
@@ -64,9 +64,13 @@ import {
   Alert,
   AlertDescription,
 } from "@/components/ui/alert";
+import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
+import { useToast } from "@/hooks/use-toast";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 
 const PluginsPage = () => {
   const { id } = useParams();
+  const { toast } = useToast();
   const [activeTab, setActiveTab] = useState('browse');
   const [platforms, setPlatforms] = useState([]);
   const [selectedPlatform, setSelectedPlatform] = useState('spigot');
@@ -87,6 +91,7 @@ const PluginsPage = () => {
   const searchTimeoutRef = useRef(null);
   const [page, setPage] = useState(1);
   const [hasMorePages, setHasMorePages] = useState(true);
+  const [untrackingPluginId, setUntrackingPluginId] = useState(null);
 
   // Load platforms
   const fetchPlatforms = async () => {
@@ -117,12 +122,18 @@ const PluginsPage = () => {
       const response = await axios.get(`/api/plugins/scan/${id}`);
       if (response.data.success) {
         setInstalledPlugins(Array.isArray(response.data.plugins) ? response.data.plugins : []);
-        // Show success message
-        // You can add a toast notification system here if you want
+        toast({
+          title: "Scan Successful",
+          description: "Installed plugins list has been updated."
+        });
       }
     } catch (err) {
       console.error('Failed to scan for plugins:', err);
-      // Show error message
+      toast({
+        title: "Scan Failed",
+        description: "Could not scan for installed plugins.",
+        variant: "destructive"
+      });
     } finally {
       setLoading(false);
     }
@@ -269,7 +280,7 @@ const PluginsPage = () => {
 
     try {
       const response = await axios.post(`/api/plugins/install/${id}`, {
-        pluginId,
+        pluginId: String(pluginId),
         platform
       });
 
@@ -282,12 +293,21 @@ const PluginsPage = () => {
       // Update installed plugins list
       fetchInstalledPlugins();
       setModalView('success');
+      toast({
+        title: "Installation Successful",
+        description: response.data.message || `${response.data.pluginName} has been installed.`
+      });
     } catch (err) {
       setInstallStatus({
         success: false,
         message: err.response?.data?.error || 'Failed to install plugin.'
       });
       setModalView('error');
+      toast({
+        title: "Installation Failed",
+        description: err.response?.data?.error || 'Failed to install plugin.',
+        variant: "destructive"
+      });
       console.error(err);
     } finally {
       setIsInstalling(false);
@@ -303,6 +323,36 @@ const PluginsPage = () => {
       setModalView('details');
       setInstallStatus({ success: null, message: '' });
     }, 200);
+  };
+
+  // Handle untrack plugin
+  const handleUntrackPlugin = async (pluginId, platform, pluginName) => {
+    setUntrackingPluginId(pluginId);
+    try {
+      await axios.delete(`/api/plugins/untrack/${id}`, {
+        data: {
+          pluginId: String(pluginId),
+          platform: String(platform)
+        }
+      });
+      
+      // Update installed plugins list
+      await fetchInstalledPlugins();
+      
+      toast({
+        title: "Plugin Hidden",
+        description: `${pluginName} is no longer tracked. Use Scan & Retrack to add it back from your server files.`
+      });
+    } catch (err) {
+      console.error('Failed to untrack plugin:', err);
+      toast({
+        title: "Removal Failed",
+        description: err.response?.data?.error || "Could not untrack the plugin.",
+        variant: "destructive"
+      });
+    } finally {
+      setUntrackingPluginId(null);
+    }
   };
 
   // Initialize data on component mount
@@ -365,24 +415,37 @@ const PluginsPage = () => {
         onClick={() => handlePluginClick(plugin)}
       >
         <CardHeader className="pb-2">
-          <div className="flex items-start justify-between gap-2">
+          <div className="flex items-start gap-3">
+            <Avatar className="h-10 w-10 rounded-md flex-shrink-0">
+              <AvatarImage 
+                src={plugin.icon} 
+                alt={`${plugin.name} icon`}
+              />
+              <AvatarFallback className="rounded-md bg-neutral-800 text-neutral-400 text-sm">
+                {plugin.name?.charAt(0)?.toUpperCase() || 'P'}
+              </AvatarFallback>
+            </Avatar>
             <div className="flex-1 min-w-0">
-              <CardTitle className="text-base truncate">{plugin.name}</CardTitle>
-              <CardDescription className="text-xs text-neutral-400 line-clamp-2">
-                {plugin.tag}
-              </CardDescription>
+              <div className="flex items-start justify-between gap-2">
+                <div className="flex-1 min-w-0">
+                  <CardTitle className="text-base truncate">{plugin.name}</CardTitle>
+                  <CardDescription className="text-xs text-neutral-400 line-clamp-2">
+                    {plugin.tag}
+                  </CardDescription>
+                </div>
+                {plugin.premium ? (
+                  <Badge variant="outline" className="bg-amber-500/20 text-amber-400 border-amber-500/20">
+                    <Gem className="w-3 h-3 mr-1" />
+                    Premium
+                  </Badge>
+                ) : installed ? (
+                  <Badge variant="outline" className="bg-green-500/20 text-green-400 border-green-500/20">
+                    <Check className="w-3 h-3 mr-1" />
+                    Installed
+                  </Badge>
+                ) : null}
+              </div>
             </div>
-            {plugin.premium ? (
-              <Badge variant="outline" className="bg-amber-500/20 text-amber-400 border-amber-500/20">
-                <Gem className="w-3 h-3 mr-1" />
-                Premium
-              </Badge>
-            ) : installed ? (
-              <Badge variant="outline" className="bg-green-500/20 text-green-400 border-green-500/20">
-                <Check className="w-3 h-3 mr-1" />
-                Installed
-              </Badge>
-            ) : null}
           </div>
         </CardHeader>
         <CardContent className="flex-1 pt-0">
@@ -618,12 +681,16 @@ const PluginsPage = () => {
                     size="sm"
                     onClick={() => fetchInstalledPlugins(true)}
                     disabled={loading}
+                    title="Re-scan the /plugins folder and restore tracked plugins"
                   >
                     <Search className="w-4 h-4 mr-2" />
-                    Scan Directory
+                    Scan & Retrack
                   </Button>
                 </div>
               </div>
+              <p className="text-sm text-neutral-400 mt-2">
+                Hidden a plugin by mistake? Use Scan & Retrack to restore plugins that still exist in your server files.
+              </p>
             </CardHeader>
             <CardContent>
               {installedPlugins.length === 0 ? (
@@ -646,7 +713,9 @@ const PluginsPage = () => {
                     <TableRow>
                       <TableHead>Name</TableHead>
                       <TableHead>Platform</TableHead>
+                      <TableHead>Status</TableHead>
                       <TableHead>Installed Date</TableHead>
+                      <TableHead className="text-right">Actions</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -658,7 +727,58 @@ const PluginsPage = () => {
                             {plugin.platform}
                           </Badge>
                         </TableCell>
+                        <TableCell>
+                          {plugin.manuallyAdded ? (
+                            <Badge variant="secondary" className="bg-amber-500/20 text-amber-400 border-amber-500/20">
+                              <Info className="w-3 h-3 mr-1" />
+                              Manual
+                            </Badge>
+                          ) : (
+                            <Badge variant="outline" className="bg-blue-500/20 text-blue-400 border-blue-500/20">
+                              <ExternalLink className="w-3 h-3 mr-1" />
+                              Marketplace
+                            </Badge>
+                          )}
+                        </TableCell>
                         <TableCell>{formatDate(plugin.installedAt)}</TableCell>
+                        <TableCell className="text-right">
+                          <div className="flex items-center justify-end gap-2">
+                            {/* External Link - only for marketplace plugins */}
+                            {plugin.external_url && (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => window.open(plugin.external_url, '_blank')}
+                                title="Open in Marketplace"
+                              >
+                                <ExternalLink className="w-4 h-4" />
+                              </Button>
+                            )}
+                            
+                            {/* Hide tracking action */}
+                            <ConfirmDialog
+                              title="Hide Plugin"
+                              description={`Hide "${plugin.name}" from the tracked list? This will keep the plugin files on your server, and you can bring it back with Scan & Retrack.`}
+                              confirmText="Hide"
+                              onConfirm={() => handleUntrackPlugin(plugin.id, plugin.platform, plugin.name)}
+                              variant="destructive"
+                              trigger={
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  disabled={untrackingPluginId === plugin.id}
+                                  title="Hide plugin from tracking"
+                                >
+                                  {untrackingPluginId === plugin.id ? (
+                                    <Loader2 className="w-4 h-4 animate-spin" />
+                                  ) : (
+                                    <Trash className="w-4 h-4 text-red-500" />
+                                  )}
+                                </Button>
+                              }
+                            />
+                          </div>
+                        </TableCell>
                       </TableRow>
                     ))}
                   </TableBody>
@@ -673,19 +793,34 @@ const PluginsPage = () => {
       <Dialog open={isModalOpen} onOpenChange={(open) => {
         if (!open) handleCloseModal();
       }}>
-        <DialogContent className="sm:max-w-[500px]">
+        <DialogContent className="sm:max-w-[500px] text-white">
           {modalView === 'details' && selectedPlugin && (
             <>
               <DialogHeader>
-                <div className="flex items-center justify-between">
-                  <DialogTitle>{selectedPlugin.name}</DialogTitle>
-                  {selectedPlugin.platform && (
-                    <Badge variant="outline" className="capitalize">
-                      {selectedPlugin.platform}
-                    </Badge>
-                  )}
+                <div className="flex items-center gap-3 pr-8">
+                  <Avatar className="h-12 w-12 rounded-md flex-shrink-0">
+                    <AvatarImage 
+                      src={pluginDetails?.icon || selectedPlugin.icon} 
+                      alt={`${selectedPlugin.name} icon`}
+                    />
+                    <AvatarFallback className="rounded-md bg-neutral-800 text-neutral-400">
+                      {selectedPlugin.name?.charAt(0)?.toUpperCase() || 'P'}
+                    </AvatarFallback>
+                  </Avatar>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between gap-2">
+                      <DialogTitle className="truncate">{selectedPlugin.name}</DialogTitle>
+                      {selectedPlugin.platform && (
+                        <Badge variant="outline" className="capitalize flex-shrink-0 border-neutral-600 text-white">
+                          {selectedPlugin.platform}
+                        </Badge>
+                      )}
+                    </div>
+                    <DialogDescription className="line-clamp-2 mt-1">
+                      {selectedPlugin.tag}
+                    </DialogDescription>
+                  </div>
                 </div>
-                <DialogDescription>{selectedPlugin.tag}</DialogDescription>
               </DialogHeader>
 
               {!pluginDetails ? (
@@ -696,46 +831,46 @@ const PluginsPage = () => {
                 <div className="space-y-4 my-2">
                   {/* Plugin stats */}
                   <div className="flex flex-wrap gap-3">
-                    <Badge variant="secondary" className="flex items-center">
-                      <Download className="w-3 h-3 mr-1" />
-                      {(pluginDetails.downloads || 0).toLocaleString()} downloads
-                    </Badge>
-                    <div className="flex items-center gap-1">
-                      <Star className="w-4 h-4 text-amber-400" />
-                      <span>{pluginDetails.rating?.average?.toFixed(1) || 'N/A'}</span>
+                      <Badge variant="secondary" className="flex items-center border border-neutral-700 bg-neutral-800 text-white hover:bg-neutral-800">
+                        <Download className="w-3 h-3 mr-1" />
+                        {(pluginDetails.downloads || 0).toLocaleString()} downloads
+                      </Badge>
+                      <div className="flex items-center gap-1">
+                        <Star className="w-4 h-4 text-amber-400" />
+                        <span className="text-white">{pluginDetails.rating?.average?.toFixed(1) || 'N/A'}</span>
+                      </div>
                     </div>
-                  </div>
 
                   {/* Version info */}
                   <div className="grid grid-cols-2 gap-2">
                     <div>
-                      <h4 className="text-sm font-medium mb-1">Version</h4>
+                      <h4 className="mb-1 text-sm font-medium text-neutral-300">Version</h4>
                       <p className="text-sm text-neutral-400">{pluginDetails.version?.name || 'Latest'}</p>
                     </div>
                     <div>
-                      <h4 className="text-sm font-medium mb-1">Author</h4>
+                      <h4 className="mb-1 text-sm font-medium text-neutral-300">Author</h4>
                       <p className="text-sm text-neutral-400">{pluginDetails.author?.name || 'Unknown'}</p>
                     </div>
                     <div>
-                      <h4 className="text-sm font-medium mb-1">Last Updated</h4>
+                      <h4 className="mb-1 text-sm font-medium text-neutral-300">Last Updated</h4>
                       <p className="text-sm text-neutral-400">{formatDate(pluginDetails.updateDate)}</p>
                     </div>
                     <div>
-                      <h4 className="text-sm font-medium mb-1">Released</h4>
+                      <h4 className="mb-1 text-sm font-medium text-neutral-300">Released</h4>
                       <p className="text-sm text-neutral-400">{formatDate(pluginDetails.releaseDate)}</p>
                     </div>
                   </div>
                 </div>
               )}
 
-              <DialogFooter className="flex gap-2 sm:gap-0">
-                <Button
-                  variant="outline"
-                  size="icon"
-                  onClick={() => window.open(pluginDetails?.external_url, '_blank')}
-                >
-                  <ExternalLink className="w-4 h-4" />
-                </Button>
+              <DialogFooter className="flex flex-col-reverse sm:flex-row gap-2 sm:gap-2 items-stretch sm:items-center">
+                  <Button
+                    size="icon"
+                    className="h-10 w-10"
+                    onClick={() => window.open(pluginDetails?.external_url, '_blank')}
+                  >
+                    <ExternalLink className="w-4 h-4" />
+                  </Button>
 
                 {selectedPlugin.premium ? (
                   <Button

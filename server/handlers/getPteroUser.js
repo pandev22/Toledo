@@ -12,7 +12,8 @@ const pteroApi = axios.create({
 });
 
 module.exports = async (userid, db) => {
-  const pteroId = await db.get("users-" + userid);
+  const user = await db.user.findUnique({ where: { id: userid }, select: { pterodactylId: true } });
+  const pteroId = user?.pterodactylId;
 
   if (!pteroId) {
     throw new Error("Pterodactyl account not linked! Please contact an administrator.");

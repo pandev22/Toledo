@@ -1,4 +1,5 @@
 const crypto = require('crypto');
+const bcrypt = require('bcrypt');
 const speakeasy = require('speakeasy');
 const qrcode = require('qrcode');
 const axios = require('axios');
@@ -53,25 +54,16 @@ const pteroApi = axios.create({
 
 // Generate backup codes
 function generateBackupCodes(count = 8) {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+  const randomCodePart = () => Array.from(crypto.randomBytes(4), (byte) => chars[byte % chars.length]).join('');
   const codes = [];
   for (let i = 0; i < count; i++) {
     // Format: xxxx-xxxx (where x is alphanumeric)
-    const part1 = Math.random().toString(36).substring(2, 6).toUpperCase();
-    const part2 = Math.random().toString(36).substring(2, 6).toUpperCase();
+    const part1 = randomCodePart();
+    const part2 = randomCodePart();
     codes.push(`${part1}-${part2}`);
   }
   return codes;
-}
-
-// Function to add a notification for the user
-async function addUserNotification(db, userId, notification) {
-  const notifications = await db.get(`notifications-${userId}`) || [];
-  notifications.push({
-    id: crypto.randomUUID(),
-    ...notification,
-    timestamp: new Date().toISOString()
-  });
-  await db.set(`notifications-${userId}`, notifications);
 }
 
 // Setup routes for 2FA
@@ -89,10 +81,13 @@ module.exports.load = async function (app, db) {
   app.get('/api/2fa/status', isAuthenticated, async (req, res) => {
     try {
       const userId = req.session.userinfo.id;
-      const twoFactorData = await db.get(`2fa-${userId}`);
+      const user = await db.user.findUnique({
+        where: { id: userId },
+        select: { twoFactorEnabled: true }
+      });
 
       res.json({
-        enabled: twoFactorData?.enabled || false
+        enabled: user?.twoFactorEnabled || false
       });
     } catch (error) {
       console.error('Error fetching 2FA status:', error);
@@ -162,21 +157,20 @@ module.exports.load = async function (app, db) {
       const backupCodes = generateBackupCodes(8);
 
       // Store 2FA data in database
-      await db.set(`2fa-${userId}`, {
-        enabled: true,
-        secret: secret,
-        backupCodes: backupCodes,
-        enabledAt: new Date().toISOString()
+      await db.user.update({
+        where: { id: userId },
+        data: {
+          twoFactorEnabled: true,
+          twoFactorSecret: secret,
+          backupCodes: JSON.stringify(backupCodes),
+          twoFactorAt: new Date()
+        }
       });
 
       // Clean up session
       delete req.session.twoFactorSetup;
 
-      // Add notification
-      await addUserNotification(db, userId, {
-        action: "security:2fa",
-        name: "Two-factor authentication enabled"
-      });
+      await db.notification.create({ data: { userId, action: "security:2fa", name: "Two-factor authentication enabled" } });
 
       res.json({
         enabled: true,
@@ -189,28 +183,38 @@ module.exports.load = async function (app, db) {
   });
 
   // Disable 2FA
-  app.post('/api/2fa/disable', isAuthenticated, async (req, res) => {
-    // Note: No body validation required as this endpoint doesn't use any body parameters
+  app.post('/api/2fa/disable', isAuthenticated, validate(schemas.twoFactorDisable), async (req, res) => {
     try {
       const userId = req.session.userinfo.id;
+      const { currentPassword } = req.body;
 
       // Check if 2FA is enabled
-      const twoFactorData = await db.get(`2fa-${userId}`);
-      if (!twoFactorData || !twoFactorData.enabled) {
+      const user = await db.user.findUnique({
+        where: { id: userId },
+        select: { twoFactorEnabled: true, password: true }
+      });
+
+      if (!user || !user.twoFactorEnabled) {
         return res.status(400).json({ error: 'Two-factor authentication is not enabled' });
       }
 
+      const passwordMatch = await bcrypt.compare(currentPassword, user.password);
+      if (!passwordMatch) {
+        return res.status(401).json({ error: 'Current password is incorrect' });
+      }
+
       // Disable 2FA
-      await db.set(`2fa-${userId}`, {
-        enabled: false,
-        disabledAt: new Date().toISOString()
+      await db.user.update({
+        where: { id: userId },
+        data: {
+          twoFactorEnabled: false,
+          twoFactorSecret: null,
+          backupCodes: null,
+          twoFactorAt: null
+        }
       });
 
-      // Add notification
-      await addUserNotification(db, userId, {
-        action: "security:2fa",
-        name: "Two-factor authentication disabled"
-      });
+      await db.notification.create({ data: { userId, action: "security:2fa", name: "Two-factor authentication disabled" } });
 
       res.json({ success: true });
     } catch (error) {
@@ -225,8 +229,12 @@ module.exports.load = async function (app, db) {
       const userId = req.session.userinfo.id;
 
       // Check if 2FA is enabled
-      const twoFactorData = await db.get(`2fa-${userId}`);
-      if (!twoFactorData || !twoFactorData.enabled) {
+      const user = await db.user.findUnique({
+        where: { id: userId },
+        select: { twoFactorEnabled: true }
+      });
+
+      if (!user || !user.twoFactorEnabled) {
         return res.status(400).json({ error: 'Two-factor authentication is not enabled' });
       }
 
@@ -234,14 +242,14 @@ module.exports.load = async function (app, db) {
       const backupCodes = generateBackupCodes(8);
 
       // Update 2FA data
-      twoFactorData.backupCodes = backupCodes;
-      await db.set(`2fa-${userId}`, twoFactorData);
-
-      // Add notification
-      await addUserNotification(db, userId, {
-        action: "security:2fa",
-        name: "New backup codes generated"
+      await db.user.update({
+        where: { id: userId },
+        data: {
+          backupCodes: JSON.stringify(backupCodes)
+        }
       });
+
+      await db.notification.create({ data: { userId, action: "security:2fa", name: "New backup codes generated" } });
 
       res.json({ backupCodes });
     } catch (error) {
@@ -261,38 +269,56 @@ module.exports.load = async function (app, db) {
       }
 
       const userId = req.session.twoFactorUserId;
-      const twoFactorData = await db.get(`2fa-${userId}`);
+      const user = await db.user.findUnique({
+        where: { id: userId },
+        select: { 
+          id: true,
+          username: true,
+          email: true,
+          twoFactorEnabled: true, 
+          twoFactorSecret: true, 
+          backupCodes: true,
+          pterodactylId: true
+        }
+      });
 
-      if (!twoFactorData || !twoFactorData.enabled) {
+      if (!user || !user.twoFactorEnabled) {
         return res.status(400).json({ error: '2FA is not enabled' });
       }
 
+      const backupCodes = JSON.parse(user.backupCodes || '[]');
+
       // Check if it's a backup code
-      if (twoFactorData.backupCodes && twoFactorData.backupCodes.includes(code)) {
+      if (backupCodes.includes(code)) {
         // Remove used backup code
-        twoFactorData.backupCodes = twoFactorData.backupCodes.filter(c => c !== code);
-        await db.set(`2fa-${userId}`, twoFactorData);
+        const newBackupCodes = backupCodes.filter(c => c !== code);
+        await db.user.update({
+          where: { id: userId },
+          data: {
+            backupCodes: JSON.stringify(newBackupCodes)
+          }
+        });
 
         // Complete login
         delete req.session.twoFactorPending;
         delete req.session.twoFactorUserId;
 
         // Fetch user data and set session
-        const userData = await db.get(`users-${userId}`);
-        req.session.userinfo = userData;
+        req.session.userinfo = {
+          id: user.id,
+          username: user.username,
+          email: user.email,
+          global_name: user.username
+        };
 
-        // Add notification
-        await addUserNotification(db, userId, {
-          action: "security:2fa",
-          name: "Logged in using backup code"
-        });
+        await db.notification.create({ data: { userId, action: "security:2fa", name: "Logged in using backup code" } });
 
         return res.json({ success: true });
       }
 
       // Verify TOTP code
       const verified = speakeasy.totp.verify({
-        secret: twoFactorData.secret,
+        secret: user.twoFactorSecret,
         encoding: 'base32',
         token: code,
         window: 1
@@ -306,25 +332,20 @@ module.exports.load = async function (app, db) {
       delete req.session.twoFactorPending;
       delete req.session.twoFactorUserId;
 
-      // Fetch user data and set session
-      const userData = await db.get(`discord-${userId}`);
+      // Set session
       req.session.userinfo = {
-        id: userData.id,
-        username: userData.username,
-        email: userData.email,
-        global_name: userData.global_name || userData.username
+        id: user.id,
+        username: user.username,
+        email: user.email,
+        global_name: user.username
       };
 
       // Fetch Pterodactyl data
-      const pteroId = userData.pterodactyl_id;
+      const pteroId = user.pterodactylId;
       const pteroResponse = await pteroApi.get(`/api/application/users/${pteroId}?include=servers`);
       req.session.pterodactyl = pteroResponse.data.attributes;
 
-      // Add notification
-      await addUserNotification(db, userId, {
-        action: "security:2fa",
-        name: "Successful 2FA verification during login"
-      });
+      await db.notification.create({ data: { userId, action: "security:2fa", name: "Successful 2FA verification during login" } });
 
       res.json({ success: true });
     } catch (error) {

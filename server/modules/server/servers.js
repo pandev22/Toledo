@@ -7,6 +7,7 @@ const getPteroUser = require('../../handlers/getPteroUser');
 const log = require('../../handlers/log');
 const cache = require('../../handlers/cache');
 const { validate, schemas } = require('../../handlers/validate');
+const { initializeServerRenewal, removeServerRenewal } = require('./renewals.js');
 
 // Dynamic eggs helper - will be initialized in load()
 let getEggsFromDB = null;
@@ -72,9 +73,10 @@ const createServerLimiter = rateLimit({
 
 // Helper functions
 async function checkUserResources(userId, db, additionalResources = { ram: 0, disk: 0, cpu: 0 }) {
-    const packageName = await db.getCached(`package-${userId}`, 60000); // Cache for 1 minute
-    const package = settings.api.client.packages.list[packageName || settings.api.client.packages.default];
-    const extra = await db.getCached(`extra-${userId}`, 60000) || { ram: 0, disk: 0, cpu: 0, servers: 0 };
+    const userRecord = await db.user.findUnique({ where: { id: userId }, select: { packageName: true, extraRam: true, extraDisk: true, extraCpu: true, extraServers: true } });
+    const packageName = userRecord?.packageName;
+    const packageConfig = settings.api.client.packages.list[packageName || settings.api.client.packages.default];
+    const extra = userRecord ? { ram: userRecord.extraRam, disk: userRecord.extraDisk, cpu: userRecord.extraCpu, servers: userRecord.extraServers } : { ram: 0, disk: 0, cpu: 0, servers: 0 };
 
     // Use cache for Pterodactyl user data (5 minutes TTL)
     const userServers = await cache.getOrSet(
@@ -93,17 +95,17 @@ async function checkUserResources(userId, db, additionalResources = { ram: 0, di
 
     return {
         allowed: {
-            ram: package.ram + extra.ram,
-            disk: package.disk + extra.disk,
-            cpu: package.cpu + extra.cpu,
-            servers: package.servers + extra.servers
+            ram: packageConfig.ram + extra.ram,
+            disk: packageConfig.disk + extra.disk,
+            cpu: packageConfig.cpu + extra.cpu,
+            servers: packageConfig.servers + extra.servers
         },
         used: usage,
         remaining: {
-            ram: (package.ram + extra.ram) - (usage.ram + additionalResources.ram),
-            disk: (package.disk + extra.disk) - (usage.disk + additionalResources.disk),
-            cpu: (package.cpu + extra.cpu) - (usage.cpu + additionalResources.cpu),
-            servers: (package.servers + extra.servers) - usage.servers
+            ram: (packageConfig.ram + extra.ram) - (usage.ram + additionalResources.ram),
+            disk: (packageConfig.disk + extra.disk) - (usage.disk + additionalResources.disk),
+            cpu: (packageConfig.cpu + extra.cpu) - (usage.cpu + additionalResources.cpu),
+            servers: (packageConfig.servers + extra.servers) - usage.servers
         }
     };
 }
@@ -131,14 +133,15 @@ module.exports.load = async function (app, db) {
     router.get('/eggs', async (req, res) => {
         try {
             // Get package name for restriction checking (with cache)
-            const packageName = await db.getCached(`package-${req.session.userinfo.id}`, 60000);
+            const userRecord = await db.user.findUnique({ where: { id: req.session.userinfo.id }, select: { packageName: true } });
+            const packageName = userRecord?.packageName;
             const userPackage = settings.api.client.packages.list[packageName || settings.api.client.packages.default];
 
             // Try dynamic eggs from database first
             if (getEggsFromDB) {
                 try {
                     const dbEggs = await getEggsFromDB(db);
-                    
+
                     if (dbEggs && Object.keys(dbEggs).length > 0) {
                         // Filter and format eggs from database
                         const eggs = Object.entries(dbEggs)
@@ -189,7 +192,8 @@ module.exports.load = async function (app, db) {
     router.get('/locations', async (req, res) => {
         try {
             // Get package name for restriction checking (with cache)
-            const packageName = await db.getCached(`package-${req.session.userinfo.id}`, 60000);
+            const userRecord = await db.user.findUnique({ where: { id: req.session.userinfo.id }, select: { packageName: true } });
+            const packageName = userRecord?.packageName;
             const userPackage = settings.api.client.packages.list[packageName || settings.api.client.packages.default];
 
             // Filter and format locations
@@ -239,32 +243,37 @@ module.exports.load = async function (app, db) {
     router.get('/resources', async (req, res) => {
         try {
             // Get package information (with cache)
-            const packageName = await db.getCached(`package-${req.session.userinfo.id}`, 60000);
-            const package = settings.api.client.packages.list[packageName || settings.api.client.packages.default];
+            const userRecord = await db.user.findUnique({ where: { id: req.session.userinfo.id }, select: { packageName: true, extraRam: true, extraDisk: true, extraCpu: true, extraServers: true } });
+            const packageName = userRecord?.packageName;
+            const packageConfig = settings.api.client.packages.list[packageName || settings.api.client.packages.default];
 
             // Get extra resources (with cache)
-            const extra = await db.getCached(`extra-${req.session.userinfo.id}`, 60000) || {
+            const extra = userRecord ? {
+                ram: userRecord.extraRam,
+                disk: userRecord.extraDisk,
+                cpu: userRecord.extraCpu,
+                servers: userRecord.extraServers
+            } : {
                 ram: 0,
                 disk: 0,
                 cpu: 0,
                 servers: 0
             };
-
             // Get current resource usage
             const resources = await checkUserResources(req.session.userinfo.id, db);
 
             // Calculate percentages
             const percentages = {
-                ram: (resources.used.ram / (package.ram + extra.ram)) * 100,
-                disk: (resources.used.disk / (package.disk + extra.disk)) * 100,
-                cpu: (resources.used.cpu / (package.cpu + extra.cpu)) * 100,
-                servers: (resources.used.servers / (package.servers + extra.servers)) * 100
+                ram: (resources.used.ram / (packageConfig.ram + extra.ram)) * 100,
+                disk: (resources.used.disk / (packageConfig.disk + extra.disk)) * 100,
+                cpu: (resources.used.cpu / (packageConfig.cpu + extra.cpu)) * 100,
+                servers: (resources.used.servers / (packageConfig.servers + extra.servers)) * 100
             };
 
             res.json({
                 package: {
                     name: packageName || settings.api.client.packages.default,
-                    ...package
+                    ...packageConfig
                 },
                 extra,
                 current: {
@@ -347,9 +356,15 @@ module.exports.load = async function (app, db) {
                 () => getPteroUser(req.session.userinfo.id, db),
                 300
             );
-            const packageName = await db.getCached(`package-${req.session.userinfo.id}`, 60000);
-            const package = settings.api.client.packages.list[packageName || settings.api.client.packages.default];
-            const extra = await db.get(`extra-${req.session.userinfo.id}`) || {
+            const userRecord = await db.user.findUnique({ where: { id: req.session.userinfo.id }, select: { packageName: true, extraRam: true, extraDisk: true, extraCpu: true, extraServers: true, pterodactylId: true } });
+            const packageName = userRecord?.packageName;
+            const packageConfig = settings.api.client.packages.list[packageName || settings.api.client.packages.default];
+            const extra = userRecord ? {
+                ram: userRecord.extraRam,
+                disk: userRecord.extraDisk,
+                cpu: userRecord.extraCpu,
+                servers: userRecord.extraServers
+            } : {
                 ram: 0,
                 disk: 0,
                 cpu: 0,
@@ -365,16 +380,16 @@ module.exports.load = async function (app, db) {
             }), { ram: 0, disk: 0, cpu: 0, servers: 0 });
 
             // Check resource limits
-            if (usage.servers >= package.servers + extra.servers) {
+            if (usage.servers >= packageConfig.servers + extra.servers) {
                 return res.status(400).json({ error: 'Server limit reached' });
             }
-            if (usage.ram + ram > package.ram + extra.ram) {
+            if (usage.ram + ram > packageConfig.ram + extra.ram) {
                 return res.status(400).json({ error: 'Insufficient RAM available' });
             }
-            if (usage.disk + disk > package.disk + extra.disk) {
+            if (usage.disk + disk > packageConfig.disk + extra.disk) {
                 return res.status(400).json({ error: 'Insufficient disk space available' });
             }
-            if (usage.cpu + cpu > package.cpu + extra.cpu) {
+            if (usage.cpu + cpu > packageConfig.cpu + extra.cpu) {
                 return res.status(400).json({ error: 'Insufficient CPU available' });
             }
 
@@ -428,7 +443,7 @@ module.exports.load = async function (app, db) {
             // Create server specification
             const serverSpec = {
                 name: name,
-                user: await db.get(`users-${req.session.userinfo.id}`),
+                user: userRecord?.pterodactylId,
                 egg: eggInfo.info.egg,
                 docker_image: eggInfo.info.docker_image,
                 startup: eggInfo.info.startup,
@@ -454,6 +469,16 @@ module.exports.load = async function (app, db) {
 
             // Create server on Pterodactyl
             const response = await pteroApi.post('/api/application/servers', serverSpec);
+
+            try {
+                await initializeServerRenewal(
+                    db,
+                    response.data.attributes,
+                    req.session.userinfo.id
+                );
+            } catch (renewalError) {
+                console.error('Failed to initialize server renewal:', renewalError);
+            }
 
             // Log server creation
             log('server_created',
@@ -489,9 +514,15 @@ module.exports.load = async function (app, db) {
                 () => getPteroUser(req.session.userinfo.id, db),
                 300
             );
-            const packageName = await db.getCached(`package-${req.session.userinfo.id}`, 60000);
-            const package = settings.api.client.packages.list[packageName || settings.api.client.packages.default];
-            const extra = await db.getCached(`extra-${req.session.userinfo.id}`, 60000) || {
+            const userRecord = await db.user.findUnique({ where: { id: req.session.userinfo.id }, select: { packageName: true, extraRam: true, extraDisk: true, extraCpu: true, extraServers: true } });
+            const packageName = userRecord?.packageName;
+            const packageConfig = settings.api.client.packages.list[packageName || settings.api.client.packages.default];
+            const extra = userRecord ? {
+                ram: userRecord.extraRam,
+                disk: userRecord.extraDisk,
+                cpu: userRecord.extraCpu,
+                servers: userRecord.extraServers
+            } : {
                 ram: 0,
                 disk: 0,
                 cpu: 0,
@@ -547,19 +578,19 @@ module.exports.load = async function (app, db) {
             }, { ram: 0, disk: 0, cpu: 0 });
 
             // Check resource limits with new values
-            if (usage.ram + ram > package.ram + extra.ram) {
+            if (usage.ram + ram > packageConfig.ram + extra.ram) {
                 return res.status(400).json({
-                    error: `Insufficient RAM. Maximum available is ${package.ram + extra.ram - usage.ram}MB`
+                    error: `Insufficient RAM. Maximum available is ${packageConfig.ram + extra.ram - usage.ram}MB`
                 });
             }
-            if (usage.disk + disk > package.disk + extra.disk) {
+            if (usage.disk + disk > packageConfig.disk + extra.disk) {
                 return res.status(400).json({
-                    error: `Insufficient disk space. Maximum available is ${package.disk + extra.disk - usage.disk}MB`
+                    error: `Insufficient disk space. Maximum available is ${packageConfig.disk + extra.disk - usage.disk}MB`
                 });
             }
-            if (usage.cpu + cpu > package.cpu + extra.cpu) {
+            if (usage.cpu + cpu > packageConfig.cpu + extra.cpu) {
                 return res.status(400).json({
-                    error: `Insufficient CPU. Maximum available is ${package.cpu + extra.cpu - usage.cpu}%`
+                    error: `Insufficient CPU. Maximum available is ${packageConfig.cpu + extra.cpu - usage.cpu}%`
                 });
             }
 
@@ -683,6 +714,15 @@ module.exports.load = async function (app, db) {
 
             // Send delete request to Pterodactyl
             await pteroApi.delete(`/api/application/servers/${serverId}/force`);
+
+            try {
+                await removeServerRenewal(db, {
+                    identifier: server.attributes.identifier,
+                    panelId: serverId
+                });
+            } catch (renewalError) {
+                console.error('Failed to remove server renewal:', renewalError);
+            }
 
             // Log the deletion
             log('server_deleted',

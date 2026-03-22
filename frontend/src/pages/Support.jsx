@@ -19,6 +19,8 @@ import {
   Bell
 } from 'lucide-react';
 import axios from 'axios';
+import { useToast } from '@/hooks/use-toast';
+import { ConfirmDialog } from '@/components/ConfirmDialog';
 
 const PriorityBadge = ({ priority }) => {
   const variants = {
@@ -46,6 +48,7 @@ const StatusBadge = ({ status }) => (
 
 const CreateTicketDialog = ({ isOpen, onClose }) => {
   const queryClient = useQueryClient();
+  const { toast } = useToast();
   const [formData, setFormData] = useState({
     subject: '',
     category: 'technical',
@@ -65,16 +68,34 @@ const CreateTicketDialog = ({ isOpen, onClose }) => {
       setFormData({ subject: '', category: 'technical', priority: 'medium', description: '' });
       setError('');
       onClose();
+      toast({
+        title: "Success",
+        description: "Your support ticket has been created.",
+      });
     },
     onError: (err) => {
-      setError(err.response?.data?.error || 'Failed to create ticket');
+      const details = err.response?.data?.details;
+      let message = err.response?.data?.error || 'Failed to create ticket';
+      if (details && Array.isArray(details)) {
+        message = `${message}: ${details.map(d => d.message || d).join(', ')}`;
+      }
+      setError(message);
+      toast({
+        title: "Error",
+        description: message,
+        variant: "destructive",
+      });
     }
   });
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!formData.subject.trim() || !formData.description.trim()) {
-      setError('Please fill in all fields');
+    if (formData.subject.trim().length < 3) {
+      setError('Subject must be at least 3 characters');
+      return;
+    }
+    if (formData.description.trim().length < 10) {
+      setError('Description must be at least 10 characters');
       return;
     }
     createMutation.mutate(formData);
@@ -84,7 +105,7 @@ const CreateTicketDialog = ({ isOpen, onClose }) => {
     <Dialog open={isOpen} onOpenChange={onClose}>
       <DialogContent className="sm:max-w-xl bg-[#1a1d21] border-[#2e3337]/50 text-white">
         <DialogHeader>
-	          <DialogTitle className="text-xl font-semibold">Create New Support Ticket</DialogTitle>
+          <DialogTitle className="text-xl font-semibold">Create New Support Ticket</DialogTitle>
         </DialogHeader>
         
         {error && (
@@ -185,6 +206,7 @@ const CreateTicketDialog = ({ isOpen, onClose }) => {
 
 const ViewTicketDialog = ({ isOpen, onClose, ticketId }) => {
   const queryClient = useQueryClient();
+  const { toast } = useToast();
   const [replyContent, setReplyContent] = useState('');
   const [lastMessageCount, setLastMessageCount] = useState(0);
   const [hasNewMessages, setHasNewMessages] = useState(false);
@@ -231,6 +253,17 @@ const ViewTicketDialog = ({ isOpen, onClose, ticketId }) => {
       queryClient.invalidateQueries(['ticket', ticketId]);
       queryClient.invalidateQueries(['user-tickets']);
       setReplyContent('');
+      toast({
+        title: "Success",
+        description: "Your reply has been sent.",
+      });
+    },
+    onError: (err) => {
+      toast({
+        title: "Error",
+        description: err.response?.data?.error || "Failed to send reply.",
+        variant: "destructive",
+      });
     }
   });
 
@@ -243,6 +276,17 @@ const ViewTicketDialog = ({ isOpen, onClose, ticketId }) => {
       queryClient.invalidateQueries(['ticket', ticketId]);
       queryClient.invalidateQueries(['user-tickets']);
       queryClient.invalidateQueries(['ticket-counts']);
+      toast({
+        title: "Success",
+        description: "Ticket has been closed.",
+      });
+    },
+    onError: (err) => {
+      toast({
+        title: "Error",
+        description: err.response?.data?.error || "Failed to close ticket.",
+        variant: "destructive",
+      });
     }
   });
 
@@ -298,24 +342,28 @@ const ViewTicketDialog = ({ isOpen, onClose, ticketId }) => {
               <div
                 key={idx}
                 className={`rounded-lg p-4 ${
-                  msg.isStaff 
-                    ? 'bg-blue-500/10 border border-blue-500/20 ml-4' 
-                    : msg.isSystem
+                  msg.isSystem
                     ? 'bg-gray-500/10 border border-gray-500/20'
+                    : msg.userId === ticket.userId
+                    ? 'bg-[#202229] border border-[#2e3337]/50 mr-4'
+                    : msg.isStaff 
+                    ? 'bg-blue-500/10 border border-blue-500/20 ml-4' 
                     : 'bg-[#202229] border border-[#2e3337]/50 mr-4'
                 }`}
               >
                 <div className="flex justify-between items-start mb-2">
                   <Badge 
                     variant="outline" 
-                    className={msg.isStaff 
-                      ? 'bg-blue-500/20 text-blue-300 border-blue-500/30 font-medium' 
-                      : msg.isSystem
+                    className={msg.isSystem
                       ? 'bg-gray-500/20 text-gray-300 border-gray-500/30 font-medium'
+                      : msg.userId === ticket.userId
+                      ? 'bg-[#3e4347] text-white border-[#4e5457] font-medium'
+                      : msg.isStaff
+                      ? 'bg-blue-500/20 text-blue-300 border-blue-500/30 font-medium' 
                       : 'bg-[#3e4347] text-white border-[#4e5457] font-medium'
                     }
                   >
-                    {msg.isStaff ? 'Support Team' : msg.isSystem ? 'System' : 'You'}
+                    {msg.isSystem ? 'System' : msg.userId === ticket.userId ? 'You' : msg.isStaff ? 'Support Team' : 'User'}
                   </Badge>
                   <span className="text-xs text-[#95a1ad]">
                     {new Date(msg.timestamp).toLocaleString()}
@@ -343,15 +391,24 @@ const ViewTicketDialog = ({ isOpen, onClose, ticketId }) => {
             </div>
 
             <DialogFooter className="gap-2">
-              <Button
-                variant="outline"
-                onClick={() => closeMutation.mutate()}
-                disabled={closeMutation.isPending}
-                className="border-red-500/30 text-red-400 hover:bg-red-500/20 hover:text-red-300 hover:border-red-500/50 transition-colors"
-              >
-                <X className="w-4 h-4 mr-2" />
-                Close Ticket
-              </Button>
+              <ConfirmDialog
+                title="Close Ticket"
+                description="Are you sure you want to close this ticket? You will not be able to send further replies."
+                confirmText="Close Ticket"
+                variant="destructive"
+                onConfirm={() => closeMutation.mutate()}
+                trigger={
+                  <Button
+                    variant="outline"
+                    type="button"
+                    disabled={closeMutation.isPending}
+                    className="border-red-500/30 text-red-400 hover:bg-red-500/20 hover:text-red-300 hover:border-red-500/50 transition-colors"
+                  >
+                    <X className="w-4 h-4 mr-2" />
+                    Close Ticket
+                  </Button>
+                }
+              />
               <Button 
                 type="submit" 
                 disabled={replyMutation.isPending || !replyContent.trim()}

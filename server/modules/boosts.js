@@ -160,49 +160,34 @@ class BoostManager {
 
   async checkExpiredBoosts() {
     try {
-      const now = Date.now();
-      // Get all active boosts for all servers
-      const activeBoosts = await this.db.get("active-boosts") || {};
+      const expiredBoosts = await this.db.boost.findMany({
+        where: {
+          status: 'active',
+          expiresAt: { lt: new Date() }
+        }
+      });
 
-      let updated = false;
+      for (const boost of expiredBoosts) {
+        // Handle boost expiration (revert server to original resources)
+        const initialResources = JSON.parse(boost.initialLimits);
+        await this.revertServerResources(boost.serverId, initialResources);
 
-      // Check each server's boosts
-      for (const [serverId, boosts] of Object.entries(activeBoosts)) {
-        const expiredBoostIds = [];
+        // Update boost status
+        await this.db.boost.update({
+          where: { id: boost.id },
+          data: { status: 'expired' }
+        });
 
-        // Check each boost for expiration
-        for (const [boostId, boost] of Object.entries(boosts)) {
-          if (boost.expiresAt < now) {
-            expiredBoostIds.push(boostId);
-
-            // Handle boost expiration (revert server to original resources)
-            await this.revertServerResources(serverId, boost);
-
-            // Create expiry log
-            await this.logBoostActivity(boost.userId, serverId, 'expired', {
-              boostType: boost.boostType,
-              duration: boost.duration,
-              resources: boost.appliedChange
-            });
-
-            updated = true;
+        // Create expiry log
+        await this.logBoostActivity(boost.userId, boost.serverId, 'expired', {
+          boostType: boost.boostType,
+          duration: boost.duration,
+          resources: {
+            memory: boost.memoryDelta,
+            cpu: boost.cpuDelta,
+            disk: boost.diskDelta
           }
-        }
-
-        // Remove expired boosts
-        for (const boostId of expiredBoostIds) {
-          delete boosts[boostId];
-        }
-
-        // If all boosts for server expired, remove server entry
-        if (Object.keys(boosts).length === 0) {
-          delete activeBoosts[serverId];
-        }
-      }
-
-      // Save updated active boosts
-      if (updated) {
-        await this.db.set("active-boosts", activeBoosts);
+        });
       }
     } catch (err) {
       console.error('[BOOST] Error in checkExpiredBoosts:', err);
@@ -214,24 +199,54 @@ class BoostManager {
   }
 
   async getServerActiveBoosts(serverId) {
-    const activeBoosts = await this.db.get("active-boosts") || {};
-    return activeBoosts[serverId] || {};
+    const boosts = await this.db.boost.findMany({
+      where: {
+        serverId,
+        status: 'active'
+      }
+    });
+
+    const formattedBoosts = {};
+    for (const boost of boosts) {
+      formattedBoosts[boost.id] = {
+        ...boost,
+        appliedAt: boost.appliedAt?.getTime(),
+        expiresAt: boost.expiresAt?.getTime(),
+        appliedChange: {
+          memory: boost.memoryDelta,
+          cpu: boost.cpuDelta,
+          disk: boost.diskDelta
+        },
+        initialResources: JSON.parse(boost.initialLimits)
+      };
+    }
+    return formattedBoosts;
   }
 
   async getUserActiveBoosts(userId) {
-    const activeBoosts = await this.db.get("active-boosts") || {};
-    const userBoosts = {};
-
-    // Find all boosts belonging to the user
-    for (const [serverId, boosts] of Object.entries(activeBoosts)) {
-      for (const [boostId, boost] of Object.entries(boosts)) {
-        if (boost.userId === userId) {
-          if (!userBoosts[serverId]) {
-            userBoosts[serverId] = {};
-          }
-          userBoosts[serverId][boostId] = boost;
-        }
+    const boosts = await this.db.boost.findMany({
+      where: {
+        userId,
+        status: 'active'
       }
+    });
+
+    const userBoosts = {};
+    for (const boost of boosts) {
+      if (!userBoosts[boost.serverId]) {
+        userBoosts[boost.serverId] = {};
+      }
+      userBoosts[boost.serverId][boost.id] = {
+        ...boost,
+        appliedAt: boost.appliedAt?.getTime(),
+        expiresAt: boost.expiresAt?.getTime(),
+        appliedChange: {
+          memory: boost.memoryDelta,
+          cpu: boost.cpuDelta,
+          disk: boost.diskDelta
+        },
+        initialResources: JSON.parse(boost.initialLimits)
+      };
     }
 
     return userBoosts;
@@ -251,7 +266,11 @@ class BoostManager {
       }
 
       // Check user has enough coins
-      const userCoins = await this.db.get(`coins-${userId}`) || 0;
+      const user = await this.db.user.findUnique({
+        where: { id: userId },
+        select: { coins: true }
+      });
+      const userCoins = user?.coins ?? 0;
       const boostPrice = boostConfig.prices[duration];
 
       if (userCoins < boostPrice) {
@@ -259,12 +278,16 @@ class BoostManager {
       }
 
       // Check if server already has this type of boost active
-      const activeBoosts = await this.getServerActiveBoosts(serverId);
-
-      for (const boost of Object.values(activeBoosts)) {
-        if (boost.boostType === boostType) {
-          throw new BoostError('Server already has this boost type active', 'BOOST_ALREADY_ACTIVE');
+      const activeTypeBoost = await this.db.boost.findFirst({
+        where: {
+          serverId,
+          boostType,
+          status: 'active'
         }
+      });
+
+      if (activeTypeBoost) {
+        throw new BoostError('Server already has this boost type active', 'BOOST_ALREADY_ACTIVE');
       }
 
       // Calculate the boost effect
@@ -292,53 +315,53 @@ class BoostManager {
         throw new BoostError('Failed to update server resources', 'UPDATE_FAILED');
       }
 
-      // Deduct coins from user
-      const newBalance = userCoins - boostPrice;
-      await this.db.set(`coins-${userId}`, newBalance);
+      // Deduct coins from user and create boost record in a transaction
+      const [updatedUser, boost] = await this.db.$transaction([
+        this.db.user.update({
+          where: { id: userId },
+          data: { coins: { decrement: boostPrice } }
+        }),
+        this.db.boost.create({
+          data: {
+            userId,
+            serverId,
+            serverName: serverAttributes.name,
+            boostType,
+            duration,
+            durationMs,
+            price: boostPrice,
+            status: 'active',
+            appliedAt: new Date(),
+            expiresAt: new Date(Date.now() + durationMs),
+            memoryDelta: appliedChange.memory,
+            cpuDelta: appliedChange.cpu,
+            diskDelta: appliedChange.disk,
+            initialLimits: JSON.stringify(initialLimits)
+          }
+        })
+      ]);
 
-      // Create boost record
-      const boostId = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-
-      const boost = {
-        id: boostId,
-        userId,
-        serverId,
-        serverName: serverAttributes.name,
-        boostType,
-        duration,
-        durationMs,
-        appliedAt: Date.now(),
-        expiresAt: Date.now() + durationMs,
-        price: boostPrice,
+      const formattedBoost = {
+        ...boost,
+        appliedAt: boost.appliedAt.getTime(),
+        expiresAt: boost.expiresAt.getTime(),
         appliedChange,
-        initialResources: {
-          memory: initialLimits.memory,
-          cpu: initialLimits.cpu,
-          disk: initialLimits.disk
-        },
+        initialResources: initialLimits,
         boostedResources: newLimits
       };
-
-      // Save the boost
-      const allActiveBoosts = await this.db.get("active-boosts") || {};
-      if (!allActiveBoosts[serverId]) {
-        allActiveBoosts[serverId] = {};
-      }
-      allActiveBoosts[serverId][boostId] = boost;
-      await this.db.set("active-boosts", allActiveBoosts);
 
       // Log the boost activity
       await this.logBoostActivity(userId, serverId, 'applied', {
         boostType,
         duration,
-        expiresAt: boost.expiresAt,
+        expiresAt: formattedBoost.expiresAt,
         price: boostPrice,
         resources: appliedChange
       });
 
       return {
-        boost,
-        newBalance
+        boost: formattedBoost,
+        newBalance: updatedUser.coins
       };
     } catch (err) {
       if (err.name === 'BoostError') {
@@ -351,12 +374,11 @@ class BoostManager {
 
   async cancelBoost(userId, serverId, boostId) {
     try {
-      // Get the active boosts
-      const activeBoosts = await this.db.get("active-boosts") || {};
-      const serverBoosts = activeBoosts[serverId] || {};
-      const boost = serverBoosts[boostId];
+      const boost = await this.db.boost.findUnique({
+        where: { id: boostId }
+      });
 
-      if (!boost) {
+      if (!boost || boost.status !== 'active' || boost.serverId !== serverId) {
         throw new BoostError('Boost not found', 'BOOST_NOT_FOUND');
       }
 
@@ -367,7 +389,8 @@ class BoostManager {
 
       // Calculate refund amount (proportional to remaining time)
       const now = Date.now();
-      const elapsed = now - boost.appliedAt;
+      const appliedAt = boost.appliedAt.getTime();
+      const elapsed = now - appliedAt;
       const total = boost.durationMs;
       const remaining = Math.max(0, total - elapsed);
 
@@ -376,31 +399,36 @@ class BoostManager {
       const refundAmount = Math.floor(boost.price * refundPercent);
 
       // Revert server resources
-      await this.revertServerResources(serverId, boost);
+      const initialResources = JSON.parse(boost.initialLimits);
+      await this.revertServerResources(serverId, initialResources);
 
-      // Remove boost
-      delete serverBoosts[boostId];
-      if (Object.keys(serverBoosts).length === 0) {
-        delete activeBoosts[serverId];
-      }
-      await this.db.set("active-boosts", activeBoosts);
-
-      // Add refund to user balance
-      const userCoins = await this.db.get(`coins-${userId}`) || 0;
-      const newBalance = userCoins + refundAmount;
-      await this.db.set(`coins-${userId}`, newBalance);
+      // Update boost status and user balance in transaction
+      const [updatedUser] = await this.db.$transaction([
+        this.db.user.update({
+          where: { id: userId },
+          data: { coins: { increment: refundAmount } }
+        }),
+        this.db.boost.update({
+          where: { id: boostId },
+          data: { status: 'cancelled' }
+        })
+      ]);
 
       // Log cancellation
       await this.logBoostActivity(userId, serverId, 'cancelled', {
         boostType: boost.boostType,
         duration: boost.duration,
         refundAmount,
-        resources: boost.appliedChange
+        resources: {
+          memory: boost.memoryDelta,
+          cpu: boost.cpuDelta,
+          disk: boost.diskDelta
+        }
       });
 
       return {
         refundAmount,
-        newBalance
+        newBalance: updatedUser.coins
       };
     } catch (err) {
       if (err.name === 'BoostError') {
@@ -413,12 +441,11 @@ class BoostManager {
 
   async extendBoost(userId, serverId, boostId, additionalDuration) {
     try {
-      // Get the active boosts
-      const activeBoosts = await this.db.get("active-boosts") || {};
-      const serverBoosts = activeBoosts[serverId] || {};
-      const boost = serverBoosts[boostId];
+      const boost = await this.db.boost.findUnique({
+        where: { id: boostId }
+      });
 
-      if (!boost) {
+      if (!boost || boost.status !== 'active' || boost.serverId !== serverId) {
         throw new BoostError('Boost not found', 'BOOST_NOT_FOUND');
       }
 
@@ -437,7 +464,11 @@ class BoostManager {
       const extensionPrice = boostConfig.prices[additionalDuration];
 
       // Check user has enough coins
-      const userCoins = await this.db.get(`coins-${userId}`) || 0;
+      const user = await this.db.user.findUnique({
+        where: { id: userId },
+        select: { coins: true }
+      });
+      const userCoins = user?.coins ?? 0;
       if (userCoins < extensionPrice) {
         throw new BoostError('Insufficient coins', 'INSUFFICIENT_COINS');
       }
@@ -445,30 +476,47 @@ class BoostManager {
       // Calculate new expiry time
       const durationInHours = parseInt(additionalDuration.replace('h', ''));
       const additionalMs = durationInHours * 60 * 60 * 1000;
-      const newExpiresAt = boost.expiresAt + additionalMs;
+      const newExpiresAt = new Date(boost.expiresAt.getTime() + additionalMs);
 
-      // Update boost expiry time and cost basis
-      boost.expiresAt = newExpiresAt;
-      boost.durationMs = (boost.durationMs || (boost.expiresAt - boost.appliedAt)) + additionalMs; // Ensure durationMs is updated
-      boost.price = (boost.price || 0) + extensionPrice; // Accumulate total cost for refund calculation
-      
-      await this.db.set("active-boosts", activeBoosts);
+      // Update boost and user balance in transaction
+      const [updatedUser, updatedBoost] = await this.db.$transaction([
+        this.db.user.update({
+          where: { id: userId },
+          data: { coins: { decrement: extensionPrice } }
+        }),
+        this.db.boost.update({
+          where: { id: boostId },
+          data: {
+            expiresAt: newExpiresAt,
+            durationMs: boost.durationMs + additionalMs,
+            price: boost.price + extensionPrice
+          }
+        })
+      ]);
 
-      // Deduct coins
-      const newBalance = userCoins - extensionPrice;
-      await this.db.set(`coins-${userId}`, newBalance);
+      const formattedBoost = {
+        ...updatedBoost,
+        appliedAt: updatedBoost.appliedAt.getTime(),
+        expiresAt: updatedBoost.expiresAt.getTime(),
+        appliedChange: {
+          memory: updatedBoost.memoryDelta,
+          cpu: updatedBoost.cpuDelta,
+          disk: updatedBoost.diskDelta
+        },
+        initialResources: JSON.parse(updatedBoost.initialLimits)
+      };
 
       // Log extension
       await this.logBoostActivity(userId, serverId, 'extended', {
-        boostType: boost.boostType,
+        boostType: updatedBoost.boostType,
         additionalDuration,
-        newExpiresAt,
+        newExpiresAt: formattedBoost.expiresAt,
         price: extensionPrice
       });
 
       return {
-        boost,
-        newBalance
+        boost: formattedBoost,
+        newBalance: updatedUser.coins
       };
     } catch (err) {
       if (err.name === 'BoostError') {
@@ -499,36 +547,47 @@ class BoostManager {
       }
 
       // Check user has enough coins
-      const userCoins = await this.db.get(`coins-${userId}`) || 0;
+      const user = await this.db.user.findUnique({
+        where: { id: userId },
+        select: { coins: true }
+      });
+      const userCoins = user?.coins ?? 0;
       const boostPrice = boostConfig.prices[duration];
 
       if (userCoins < boostPrice) {
         throw new BoostError('Insufficient coins', 'INSUFFICIENT_COINS');
       }
 
-      // Create scheduled boost record
-      const scheduledBoostId = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+      // Deduct coins and create scheduled boost record in transaction
+      const durationInHours = parseInt(duration.replace('h', ''));
+      const durationMs = durationInHours * 60 * 60 * 1000;
 
-      const scheduledBoost = {
-        id: scheduledBoostId,
-        userId,
-        serverId,
-        serverName: serverAttributes.name,
-        boostType,
-        duration,
-        price: boostPrice,
-        scheduledTime,
-        createdAt: now
+      const [updatedUser, boost] = await this.db.$transaction([
+        this.db.user.update({
+          where: { id: userId },
+          data: { coins: { decrement: boostPrice } }
+        }),
+        this.db.boost.create({
+          data: {
+            userId,
+            serverId,
+            serverName: serverAttributes.name,
+            boostType,
+            duration,
+            durationMs,
+            price: boostPrice,
+            status: 'scheduled',
+            scheduledFor: new Date(scheduledTime),
+            initialLimits: JSON.stringify(serverAttributes.limits)
+          }
+        })
+      ]);
+
+      const formattedBoost = {
+        ...boost,
+        scheduledTime: boost.scheduledFor.getTime(),
+        createdAt: boost.createdAt.getTime()
       };
-
-      // Save the scheduled boost
-      const scheduledBoosts = await this.db.get("scheduled-boosts") || [];
-      scheduledBoosts.push(scheduledBoost);
-      await this.db.set("scheduled-boosts", scheduledBoosts);
-
-      // Deduct coins
-      const newBalance = userCoins - boostPrice;
-      await this.db.set(`coins-${userId}`, newBalance);
 
       // Log the scheduled boost
       await this.logBoostActivity(userId, serverId, 'scheduled', {
@@ -539,8 +598,8 @@ class BoostManager {
       });
 
       return {
-        scheduledBoost,
-        newBalance
+        scheduledBoost: formattedBoost,
+        newBalance: updatedUser.coins
       };
     } catch (err) {
       if (err.name === 'BoostError') {
@@ -553,8 +612,17 @@ class BoostManager {
 
   async getScheduledBoosts(userId) {
     try {
-      const allScheduledBoosts = await this.db.get("scheduled-boosts") || [];
-      return allScheduledBoosts.filter(boost => boost.userId === userId);
+      const boosts = await this.db.boost.findMany({
+        where: {
+          userId,
+          status: 'scheduled'
+        }
+      });
+      return boosts.map(boost => ({
+        ...boost,
+        scheduledTime: boost.scheduledFor.getTime(),
+        createdAt: boost.createdAt.getTime()
+      }));
     } catch (err) {
       console.error('[BOOST] Error getting scheduled boosts:', err);
       throw new BoostError('Failed to get scheduled boosts', 'INTERNAL_ERROR');
@@ -563,37 +631,37 @@ class BoostManager {
 
   async cancelScheduledBoost(userId, scheduledBoostId) {
     try {
-      const scheduledBoosts = await this.db.get("scheduled-boosts") || [];
-      const boostIndex = scheduledBoosts.findIndex(boost =>
-        boost.id === scheduledBoostId && boost.userId === userId
-      );
+      const boost = await this.db.boost.findUnique({
+        where: { id: scheduledBoostId }
+      });
 
-      if (boostIndex === -1) {
+      if (!boost || boost.status !== 'scheduled' || boost.userId !== userId) {
         throw new BoostError('Scheduled boost not found', 'BOOST_NOT_FOUND');
       }
 
-      const boost = scheduledBoosts[boostIndex];
-
-      // Remove from scheduled boosts
-      scheduledBoosts.splice(boostIndex, 1);
-      await this.db.set("scheduled-boosts", scheduledBoosts);
-
-      // Refund full amount
-      const userCoins = await this.db.get(`coins-${userId}`) || 0;
-      const newBalance = userCoins + boost.price;
-      await this.db.set(`coins-${userId}`, newBalance);
+      // Refund full amount and update status in transaction
+      const [updatedUser] = await this.db.$transaction([
+        this.db.user.update({
+          where: { id: userId },
+          data: { coins: { increment: boost.price } }
+        }),
+        this.db.boost.update({
+          where: { id: scheduledBoostId },
+          data: { status: 'cancelled' }
+        })
+      ]);
 
       // Log cancellation
       await this.logBoostActivity(userId, boost.serverId, 'scheduled_cancelled', {
         boostType: boost.boostType,
         duration: boost.duration,
-        scheduledTime: boost.scheduledTime,
+        scheduledTime: boost.scheduledFor.getTime(),
         refundAmount: boost.price
       });
 
       return {
         refundAmount: boost.price,
-        newBalance
+        newBalance: updatedUser.coins
       };
     } catch (err) {
       if (err.name === 'BoostError') {
@@ -606,8 +674,26 @@ class BoostManager {
 
   async getBoostHistory(userId, limit = 20) {
     try {
-      const history = await this.db.get(`boost-history-${userId}`) || [];
-      return history.slice(0, limit);
+      // In Prisma, we can query transactions and boosts to get history
+      // The old implementation used a separate history key. 
+      // We'll query transactions of type related to boosts for the user.
+      const transactions = await this.db.transaction.findMany({
+        where: {
+          userId,
+          type: { in: ['boost_purchase', 'boost_extend', 'boost_refund'] }
+        },
+        orderBy: { createdAt: 'desc' },
+        take: limit
+      });
+
+      return transactions.map(txn => ({
+        id: txn.id,
+        userId: txn.userId,
+        type: txn.type,
+        details: JSON.parse(txn.details),
+        amount: txn.amount,
+        timestamp: txn.createdAt.getTime()
+      }));
     } catch (err) {
       console.error('[BOOST] Error getting boost history:', err);
       throw new BoostError('Failed to get boost history', 'INTERNAL_ERROR');
@@ -616,15 +702,6 @@ class BoostManager {
 
   async logBoostActivity(userId, serverId, type, details) {
     try {
-      const entry = {
-        id: `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-        userId,
-        serverId,
-        type,
-        details,
-        timestamp: Date.now()
-      };
-
       // Log to wallet transactions if it involves coins
       let walletType = null;
       let walletAmount = 0;
@@ -645,31 +722,19 @@ class BoostManager {
       }
 
       if (walletType && walletAmount !== 0) {
-        const walletTransaction = {
-          id: `txn_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-          type: walletType,
-          details: {
+        await this.db.transaction.create({
+          data: {
+            userId,
+            type: walletType,
+            amount: walletAmount,
             description: walletDesc,
-            ...details
-          },
-          amount: walletAmount,
-          timestamp: new Date().toISOString()
-        };
-        const walletHistory = await this.db.get(`transactions-${userId}`) || [];
-        walletHistory.push(walletTransaction);
-        await this.db.set(`transactions-${userId}`, walletHistory);
+            details: JSON.stringify(details)
+          }
+        });
       }
 
-      const history = await this.db.get(`boost-history-${userId}`) || [];
-      history.unshift(entry); // Add to beginning (newest first)
-
-      // Keep history size reasonable (100 entries max)
-      if (history.length > 100) {
-        history.splice(100);
-      }
-
-      await this.db.set(`boost-history-${userId}`, history);
-      return entry;
+      // We don't need a separate boost-history-userId anymore as we can query transactions
+      return { success: true };
     } catch (err) {
       console.error('[BOOST] Error logging boost activity:', err);
     }
@@ -705,12 +770,12 @@ class BoostManager {
   }
 
   // Helper function to revert server resources to original values
-  async revertServerResources(serverId, boost) {
+  async revertServerResources(serverId, initialLimits) {
     try {
       return await this.updateServerResources(serverId, {
-        memory: boost.initialResources.memory,
-        cpu: boost.initialResources.cpu,
-        disk: boost.initialResources.disk
+        memory: initialLimits.memory,
+        cpu: initialLimits.cpu,
+        disk: initialLimits.disk
       });
     } catch (err) {
       console.error('[BOOST] Error reverting server resources:', err);
@@ -827,7 +892,12 @@ module.exports.load = function (app, db) {
         const serverInfo = serverInfoResponse.data;
 
         // Verify server ownership
-        if (serverInfo.attributes.user !== parseInt(await db.get(`users-${userId}`))) {
+        const user = await db.user.findUnique({
+          where: { id: userId },
+          select: { pterodactylId: true }
+        });
+
+        if (serverInfo.attributes.user !== user?.pterodactylId) {
           return res.status(403).json({ error: 'You do not own this server', code: 'NOT_OWNER' });
         }
 
@@ -926,7 +996,12 @@ module.exports.load = function (app, db) {
         const serverInfo = serverInfoResponse.data;
 
         // Verify server ownership
-        if (serverInfo.attributes.user !== parseInt(await db.get(`users-${userId}`))) {
+        const user = await db.user.findUnique({
+          where: { id: userId },
+          select: { pterodactylId: true }
+        });
+
+        if (serverInfo.attributes.user !== user?.pterodactylId) {
           return res.status(403).json({ error: 'You do not own this server', code: 'NOT_OWNER' });
         }
 
@@ -986,15 +1061,14 @@ module.exports.load = function (app, db) {
   // Initialize the scheduled boost processor
   const processScheduledBoosts = async () => {
     try {
-      const now = Date.now();
-      const scheduledBoosts = await db.get("scheduled-boosts") || [];
-      const dueBoosts = scheduledBoosts.filter(boost => boost.scheduledTime <= now);
+      const dueBoosts = await db.boost.findMany({
+        where: {
+          status: 'scheduled',
+          scheduledFor: { lte: new Date() }
+        }
+      });
 
       if (dueBoosts.length > 0) {
-        // Remove due boosts from the scheduled list
-        const updatedScheduledBoosts = scheduledBoosts.filter(boost => boost.scheduledTime > now);
-        await db.set("scheduled-boosts", updatedScheduledBoosts);
-
         // Process each due boost
         for (const boost of dueBoosts) {
           try {
@@ -1011,22 +1085,43 @@ module.exports.load = function (app, db) {
               boost.duration
             );
 
+            //update original scheduled boost record to avoid double-processing (applyBoost creates a NEW active boost record)
+            //applyBoost in the old version used to just set the status? 
+            //Looking at applyBoost, it created a new ID
+            //in original code, applyBoost was called and it created a NEW record in active-boosts
+            //then it logged scheduled_applied
+            //the scheduled boost was removed from scheduled-boosts array
+
+            await db.boost.update({
+              where: { id: boost.id },
+              data: { status: 'applied' }
+            });
+
             await boostManager.logBoostActivity(boost.userId, boost.serverId, 'scheduled_applied', {
-              scheduledTime: boost.scheduledTime,
-              appliedTime: now,
-              ...boost
+              scheduledTime: boost.scheduledFor.getTime(),
+              appliedTime: Date.now(),
+              ...boost,
+              initialLimits: JSON.parse(boost.initialLimits)
             });
           } catch (err) {
             console.error(`[BOOST] Error applying scheduled boost:`, err);
 
             // Refund the user
-            const userCoins = await db.get(`coins-${boost.userId}`) || 0;
-            await db.set(`coins-${boost.userId}`, userCoins + boost.price);
+            await db.user.update({
+              where: { id: boost.userId },
+              data: { coins: { increment: boost.price } }
+            });
+
+            await db.boost.update({
+              where: { id: boost.id },
+              data: { status: 'failed' }
+            });
 
             await boostManager.logBoostActivity(boost.userId, boost.serverId, 'scheduled_failed', {
               reason: err.message || 'Unknown error',
               refundAmount: boost.price,
-              ...boost
+              ...boost,
+              initialLimits: JSON.parse(boost.initialLimits)
             });
           }
         }

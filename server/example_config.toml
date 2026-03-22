@@ -160,3 +160,15 @@ webhook = "https://discord.com/api/webhooks/your_webhook_url"
 "radar node deleted" = true
 "coins updated" = true
 "resources updated" = true
+
+# ---------------------------------
+# Renewal Configuration
+# ---------------------------------
+[renewal]
+enabled = true
+renewal_period_days = 2
+renewal_window_hours = 24
+check_interval_minutes = 5
+auto_delete_enabled = true
+auto_delete_after_days = 7
+api_delay_ms = 1000

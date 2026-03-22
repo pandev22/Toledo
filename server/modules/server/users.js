@@ -35,34 +35,6 @@ const HeliactylModule = {
 
 module.exports.HeliactylModule = HeliactylModule;
 
-async function addUserToAllUsersList(userId) {
-  let allUsers = await db.get('all_users') || [];
-  if (!allUsers.includes(userId)) {
-    allUsers.push(userId);
-    await db.set('all_users', allUsers);
-  }
-}
-
-// Helper function to find discord user by email
-async function findDiscordIdFromEmail(email, db) {
-  // Check if it's already a discord email format
-  const discordMatch = email.match(/^discord_([^@+]+)(?:\+\d+)?@/);
-  if (discordMatch) {
-    return discordMatch[1]; // Return the extracted discord ID
-  }
-
-  // Search all discord-* keys for matching email
-  const allUsers = await db.get('all_users') || [];
-  for (const userId of allUsers) {
-    const userData = await db.get(`discord-${userId}`);
-    if (userData && userData.email === email) {
-      return userId;
-    }
-  }
-
-  return null;
-}
-
 async function getServerName(serverId) {
   try {
     const response = await axios.get(
@@ -99,36 +71,19 @@ async function updateSubuserInfo(serverId, serverOwnerId) {
       email: user.attributes.email,
     }));
 
-    await db.set(`subusers-${serverId}`, subusers);
-
     const serverName = await getServerName(serverId);
 
-    // Process each subuser and create mappings for both email types
     for (const subuser of subusers) {
-      // Standard storage by pterodactyl username
-      let subuserServers = await db.get(`subuser-servers-${subuser.id}`) || [];
-      if (!subuserServers.some(server => server.id === serverId)) {
-        subuserServers.push({
-          id: serverId,
-          name: serverName,
-          ownerId: serverOwnerId
-        });
-        await db.set(`subuser-servers-${subuser.id}`, subuserServers);
-      }
+      const user = await db.user.findFirst({
+        where: { OR: [{ email: subuser.email }, { pteroUsername: subuser.username }, { username: subuser.username }] }
+      });
 
-      // Find the discord ID associated with this user
-      const discordId = await findDiscordIdFromEmail(subuser.email, db);
-      if (discordId) {
-        // Store by discord ID too
-        let discordServers = await db.get(`subuser-servers-discord-${discordId}`) || [];
-        if (!discordServers.some(server => server.id === serverId)) {
-          discordServers.push({
-            id: serverId,
-            name: serverName,
-            ownerId: serverOwnerId
-          });
-          await db.set(`subuser-servers-discord-${discordId}`, discordServers);
-        }
+      if (user) {
+        await db.subuserServer.upsert({
+          where: { userId_serverId_source: { userId: user.id, serverId, source: 'subuser' } },
+          create: { userId: user.id, serverId, serverName, ownerId: serverOwnerId, source: 'subuser' },
+          update: { serverName, ownerId: serverOwnerId }
+        });
       }
     }
   } catch (error) {

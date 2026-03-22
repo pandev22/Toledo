@@ -1,22 +1,23 @@
-import React, { useState } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
+import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
-import { Switch } from '@/components/ui/switch';
-import { ScrollArea } from '@/components/ui/scroll-area';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogFooter,
 } from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem, DropdownMenuTrigger
+} from "@/components/ui/dropdown-menu";
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { ScrollArea } from '@/components/ui/scroll-area';
 import {
   Select,
   SelectContent,
@@ -24,37 +25,33 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import { Alert, AlertDescription } from '@/components/ui/alert';
-import {
-  RefreshCw,
-  Egg,
-  Settings2,
-  MoreVertical,
-  Check,
-  X,
-  Download,
-  FolderOpen,
-  Plus,
-  Trash2,
-  Edit,
-  Search,
-  Filter,
-  AlertCircle,
-  Cpu,
-  HardDrive,
-  MemoryStick,
-  Layers
-} from 'lucide-react';
-import axios from 'axios';
+import { Switch } from '@/components/ui/switch';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useToast } from '@/hooks/use-toast';
+import { showApiErrorToast } from '@/lib/api';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import axios from 'axios';
+import {
+  AlertCircle,
+  Check,
+  Cpu,
+  Download,
+  Edit,
+  Egg,
+  Filter,
+  HardDrive,
+  Layers,
+  MemoryStick,
+  MoreVertical,
+  Plus,
+  RefreshCw,
+  Search,
+  X
+} from 'lucide-react';
+import React, { useState } from 'react';
 
+import { ConfirmDialog } from '@/components/ConfirmDialog';
 export default function AdminEggs() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
@@ -62,9 +59,23 @@ export default function AdminEggs() {
   const [categoryFilter, setCategoryFilter] = useState('all');
   const [selectedEgg, setSelectedEgg] = useState(null);
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
-  const [isCategoryDialogOpen, setIsCategoryDialogOpen] = useState(false);
+  const [isManageCategoriesOpen, setIsManageCategoriesOpen] = useState(false);
+  const [isCreateCategoryOpen, setIsCreateCategoryOpen] = useState(false);
   const [newCategory, setNewCategory] = useState({ id: '', name: '', icon: 'folder' });
   const [isSyncing, setIsSyncing] = useState(false);
+  const [pendingDisableEgg, setPendingDisableEgg] = useState(null);
+
+  const normalizeMaximumResources = (maximum) => {
+    if (!maximum || typeof maximum !== 'object') {
+      return null;
+    }
+
+    return {
+      ram: maximum.ram ?? null,
+      disk: maximum.disk ?? null,
+      cpu: maximum.cpu ?? null,
+    };
+  };
 
   // Fetch eggs and categories
   const { data: eggsData, isLoading, error } = useQuery({
@@ -91,11 +102,7 @@ export default function AdminEggs() {
       setIsSyncing(false);
     },
     onError: (error) => {
-      toast({
-        title: "Sync Failed",
-        description: error.response?.data?.error || "Failed to sync eggs",
-        variant: "destructive"
-      });
+      showApiErrorToast(toast, error, 'Failed to sync eggs', 'Sync Failed');
       setIsSyncing(false);
     }
   });
@@ -110,11 +117,7 @@ export default function AdminEggs() {
       queryClient.invalidateQueries(['admin-eggs']);
     },
     onError: (error) => {
-      toast({
-        title: "Toggle Failed",
-        description: error.response?.data?.error || "Failed to toggle egg",
-        variant: "destructive"
-      });
+      showApiErrorToast(toast, error, 'Failed to toggle egg', 'Toggle Failed');
     }
   });
 
@@ -133,11 +136,7 @@ export default function AdminEggs() {
       });
     },
     onError: (error) => {
-      toast({
-        title: "Update Failed",
-        description: error.response?.data?.error || "Failed to update egg",
-        variant: "destructive"
-      });
+      showApiErrorToast(toast, error, 'Failed to update egg', 'Update Failed');
     }
   });
 
@@ -149,7 +148,7 @@ export default function AdminEggs() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries(['admin-eggs']);
-      setIsCategoryDialogOpen(false);
+      setIsCreateCategoryOpen(false);
       setNewCategory({ id: '', name: '', icon: 'folder' });
       toast({
         title: "Category Created",
@@ -157,11 +156,25 @@ export default function AdminEggs() {
       });
     },
     onError: (error) => {
+      showApiErrorToast(toast, error, 'Failed to create category', 'Creation Failed');
+    }
+  });
+
+  const deleteCategoryMutation = useMutation({
+    mutationFn: async (category) => {
+      await axios.delete(`/api/admin/eggs/categories/${category.id}`);
+      return category;
+    },
+    onSuccess: (category) => {
+      queryClient.invalidateQueries(['admin-eggs']);
+      setCategoryFilter((current) => current === category.id ? 'all' : current);
       toast({
-        title: "Creation Failed",
-        description: error.response?.data?.error || "Failed to create category",
-        variant: "destructive"
+        title: 'Category Deleted',
+        description: `${category.name} was deleted and its eggs were moved to Other.`,
       });
+    },
+    onError: (error) => {
+      showApiErrorToast(toast, error, 'Failed to delete category', 'Deletion Failed');
     }
   });
 
@@ -235,27 +248,32 @@ export default function AdminEggs() {
           <div className="flex items-center gap-2">
             <Button
               variant="outline"
-              onClick={() => setIsCategoryDialogOpen(true)}
+              onClick={() => setIsManageCategoriesOpen(true)}
             >
-              <Plus className="w-4 h-4 mr-2" />
-              New Category
+              <Layers className="w-4 h-4 mr-2" />
+              Manage Categories
             </Button>
-            <Button
-              onClick={() => syncMutation.mutate()}
-              disabled={isSyncing}
-            >
-              {isSyncing ? (
-                <>
-                  <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
-                  Syncing...
-                </>
-              ) : (
-                <>
-                  <Download className="w-4 h-4 mr-2" />
-                  Sync from Panel
-                </>
-              )}
-            </Button>
+            <ConfirmDialog
+              title="Sync Eggs from Panel?"
+              description="This will fetch all eggs from your Pterodactyl panel. New eggs will be added and existing ones will be updated."
+              confirmText="Sync Now"
+              onConfirm={() => syncMutation.mutate()}
+              trigger={
+                <Button disabled={isSyncing}>
+                  {isSyncing ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
+                      Syncing...
+                    </>
+                  ) : (
+                    <>
+                      <Download className="w-4 h-4 mr-2" />
+                      Sync from Panel
+                    </>
+                  )}
+                </Button>
+              }
+            />
           </div>
         </div>
 
@@ -373,14 +391,21 @@ export default function AdminEggs() {
                           <div className="space-y-2">
                             <Egg className="w-12 h-12 mx-auto text-neutral-600" />
                             <p>No eggs synced yet</p>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => syncMutation.mutate()}
-                            >
-                              <Download className="w-4 h-4 mr-2" />
-                              Sync from Panel
-                            </Button>
+                            <ConfirmDialog
+                              title="Sync Eggs from Panel?"
+                              description="This will fetch all eggs from your Pterodactyl panel. New eggs will be added and existing ones will be updated."
+                              confirmText="Sync Now"
+                              onConfirm={() => syncMutation.mutate()}
+                              trigger={
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                >
+                                  <Download className="w-4 h-4 mr-2" />
+                                  Sync from Panel
+                                </Button>
+                              }
+                            />
                           </div>
                         ) : (
                           "No eggs match your filters"
@@ -391,11 +416,27 @@ export default function AdminEggs() {
                     filteredEggs.map(([id, egg]) => (
                       <TableRow key={id}>
                         <TableCell>
-                          <Switch
-                            checked={egg.enabled}
-                            onCheckedChange={() => toggleMutation.mutate(id)}
-                            disabled={toggleMutation.isLoading}
-                          />
+                          {/*
+                            Render Switch directly instead of wrapping in ConfirmDialog.
+                            Using onClick for disable (shows confirmation dialog) and onCheckedChange for enable (direct).
+                            This avoids Radix data-state collision between Switch and AlertDialogTrigger.
+                          */}
+                          {egg.enabled ? (
+                            <Switch
+                              checked={egg.enabled}
+                              onClick={(e) => {
+                                e.preventDefault();
+                                setPendingDisableEgg({ id, name: egg.displayName || egg.originalName });
+                              }}
+                              disabled={toggleMutation.isLoading}
+                            />
+                          ) : (
+                            <Switch
+                              checked={egg.enabled}
+                              onCheckedChange={() => toggleMutation.mutate(id)}
+                              disabled={toggleMutation.isLoading}
+                            />
+                          )}
                         </TableCell>
                         <TableCell>
                           <div>
@@ -450,19 +491,25 @@ export default function AdminEggs() {
                                 <Edit className="w-4 h-4 mr-2" />
                                 Edit Configuration
                               </DropdownMenuItem>
-                              <DropdownMenuItem onClick={() => toggleMutation.mutate(id)}>
-                                {egg.enabled ? (
-                                  <>
-                                    <X className="w-4 h-4 mr-2" />
-                                    Disable
-                                  </>
-                                ) : (
-                                  <>
-                                    <Check className="w-4 h-4 mr-2" />
-                                    Enable
-                                  </>
-                                )}
-                              </DropdownMenuItem>
+                              {egg.enabled ? (
+                                <ConfirmDialog
+                                  title="Disable Egg?"
+                                  description={`Are you sure you want to disable ${egg.displayName || egg.originalName}? Users will no longer be able to create servers with this egg.`}
+                                  onConfirm={() => toggleMutation.mutate(id)}
+                                  variant="destructive"
+                                  trigger={
+                                    <DropdownMenuItem onSelect={(e) => e.preventDefault()}>
+                                      <X className="w-4 h-4 mr-2" />
+                                      Disable
+                                    </DropdownMenuItem>
+                                  }
+                                />
+                              ) : (
+                                <DropdownMenuItem onClick={() => toggleMutation.mutate(id)}>
+                                  <Check className="w-4 h-4 mr-2" />
+                                  Enable
+                                </DropdownMenuItem>
+                              )}
                             </DropdownMenuContent>
                           </DropdownMenu>
                         </TableCell>
@@ -495,7 +542,7 @@ export default function AdminEggs() {
                   <TabsTrigger value="advanced">Advanced</TabsTrigger>
                 </TabsList>
 
-                <TabsContent value="general" className="space-y-4 mt-4">
+                <TabsContent value="general" className="mt-4 space-y-4 focus-visible:ring-0 focus-visible:ring-offset-0">
                   <div className="space-y-2">
                     <Label>Display Name</Label>
                     <Input
@@ -520,12 +567,14 @@ export default function AdminEggs() {
                         category: value
                       })}
                     >
-                      <SelectTrigger>
-                        <SelectValue />
+                      <SelectTrigger className="border-neutral-700 bg-[#111111] text-white [&>span]:text-white">
+                        <SelectValue placeholder="Select category" />
                       </SelectTrigger>
-                      <SelectContent>
+                      <SelectContent className="border-neutral-800 bg-[#111111] text-white">
                         {eggsData?.categories?.map(cat => (
-                          <SelectItem key={cat.id} value={cat.id}>{cat.name}</SelectItem>
+                          <SelectItem key={cat.id} value={cat.id} className="text-white focus:bg-neutral-800 focus:text-white">
+                            {cat.name}
+                          </SelectItem>
                         ))}
                       </SelectContent>
                     </Select>
@@ -548,7 +597,7 @@ export default function AdminEggs() {
                   </div>
                 </TabsContent>
 
-                <TabsContent value="resources" className="space-y-4 mt-4">
+                <TabsContent value="resources" className="mt-4 space-y-4 focus-visible:ring-0 focus-visible:ring-offset-0">
                   <div className="grid grid-cols-3 gap-4">
                     <div className="space-y-2">
                       <Label>Minimum RAM (MB)</Label>
@@ -626,7 +675,7 @@ export default function AdminEggs() {
                   </div>
                 </TabsContent>
 
-                <TabsContent value="advanced" className="space-y-4 mt-4">
+                <TabsContent value="advanced" className="mt-4 space-y-4 focus-visible:ring-0 focus-visible:ring-offset-0">
                   <div className="space-y-2">
                     <Label>Docker Image</Label>
                     <Input
@@ -650,7 +699,7 @@ export default function AdminEggs() {
                   </div>
 
                   <Alert className="bg-neutral-900 border-neutral-800 flex items-center gap-3">
-                    <AlertCircle className="h-4 w-4 text-neutral-400 shrink-0" />
+                    <AlertCircle className="h-4 w-4 invert shrink-0" />
                     <AlertDescription className="text-xs text-neutral-300">
                       Advanced settings override the Pterodactyl egg configuration. Changes will be preserved on sync.
                     </AlertDescription>
@@ -667,7 +716,12 @@ export default function AdminEggs() {
             <Button
               onClick={() => {
                 const { id, ...updates } = selectedEgg;
-                updateMutation.mutate({ eggId: id, updates });
+                const payload = {
+                  ...updates,
+                  maximum: normalizeMaximumResources(updates.maximum),
+                };
+
+                updateMutation.mutate({ eggId: id, updates: payload });
               }}
               disabled={updateMutation.isLoading}
             >
@@ -684,61 +738,171 @@ export default function AdminEggs() {
         </DialogContent>
       </Dialog>
 
-      {/* Create Category Dialog */}
-      <Dialog open={isCategoryDialogOpen} onOpenChange={setIsCategoryDialogOpen}>
+      <Dialog open={isManageCategoriesOpen} onOpenChange={(open) => {
+            setIsManageCategoriesOpen(open);
+            if (!open) {
+              setIsCreateCategoryOpen(false);
+            }
+          }}>
         <DialogContent className="bg-[#0a0a0a] border-neutral-800">
           <DialogHeader>
-            <DialogTitle className="text-white">Create Category</DialogTitle>
+            <DialogTitle className="text-white">Manage Categories</DialogTitle>
             <DialogDescription>
-              Add a new category to organize your eggs
+              Create or delete categories. Eggs in a deleted category will automatically move to Other.
             </DialogDescription>
           </DialogHeader>
 
           <div className="space-y-4">
-            <div className="space-y-2">
-              <Label>Category ID</Label>
-              <Input
-                value={newCategory.id}
-                onChange={(e) => setNewCategory({
-                  ...newCategory,
-                  id: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '')
-                })}
-                placeholder="e.g. minecraft, bots, web"
-              />
-              <p className="text-xs text-neutral-500">
-                Lowercase letters, numbers and dashes only
-              </p>
-            </div>
+            {/* Create Category Button */}
+            <Button
+              variant="outline"
+              className="w-full justify-start"
+              onClick={() => setIsCreateCategoryOpen(!isCreateCategoryOpen)}
+            >
+              <Plus className="w-4 h-4 mr-2" />
+              {isCreateCategoryOpen ? 'Cancel' : 'Create Category'}
+            </Button>
 
-            <div className="space-y-2">
-              <Label>Display Name</Label>
-              <Input
-                value={newCategory.name}
-                onChange={(e) => setNewCategory({
-                  ...newCategory,
-                  name: e.target.value
-                })}
-                placeholder="e.g. Minecraft Servers"
-              />
+            {/* Collapsible Create Category Form */}
+            {isCreateCategoryOpen && (
+              <div className="rounded-lg border border-neutral-800 bg-[#111111] p-4 space-y-4 animate-in slide-in-from-top-2 duration-200">
+                <div>
+                  <h3 className="font-medium text-white">New Category</h3>
+                  <p className="text-sm text-neutral-400">Add a new category to organize your eggs.</p>
+                </div>
+
+                <div className="space-y-2">
+                  <Label>Category ID</Label>
+                  <Input
+                    value={newCategory.id}
+                    onChange={(e) => setNewCategory({
+                      ...newCategory,
+                      id: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '')
+                    })}
+                    placeholder="e.g. minecraft, bots, web"
+                  />
+                  <p className="text-xs text-neutral-500">
+                    Lowercase letters, numbers and dashes only
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  <Label>Display Name</Label>
+                  <Input
+                    value={newCategory.name}
+                    onChange={(e) => setNewCategory({
+                      ...newCategory,
+                      name: e.target.value
+                    })}
+                    placeholder="e.g. Minecraft Servers"
+                  />
+                </div>
+
+                <div className="flex justify-end">
+                  <Button
+                    onClick={() => createCategoryMutation.mutate(newCategory)}
+                    disabled={!newCategory.id || !newCategory.name || createCategoryMutation.isLoading}
+                  >
+                    {createCategoryMutation.isLoading ? (
+                      <>
+                        <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
+                        Creating...
+                      </>
+                    ) : (
+                      <>
+                        <Plus className="w-4 h-4 mr-2" />
+                        Create
+                      </>
+                    )}
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {/* Categories List */}
+            <div className="space-y-3 max-h-[40vh] overflow-y-auto">
+              {eggsData?.categories?.map((category) => {
+                const isDefaultOther = category.id === 'other';
+                const isDeleting = deleteCategoryMutation.isPending && deleteCategoryMutation.variables?.id === category.id;
+
+                return (
+                  <div key={category.id} className="flex items-center justify-between rounded-lg border border-neutral-800 bg-[#111111] px-4 py-3">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <p className="font-medium text-white truncate">{category.name}</p>
+                      {isDefaultOther && (
+                        <Badge variant="outline" className="border-neutral-700 text-neutral-300">Protected</Badge>
+                      )}
+                    </div>
+                    <p className="text-xs text-neutral-500">ID: {category.id}</p>
+                  </div>
+
+                  {isDefaultOther ? (
+                    <Button variant="ghost" size="sm" disabled className="text-neutral-500">
+                      Cannot Delete
+                    </Button>
+                  ) : (
+                    <ConfirmDialog
+                      title="Delete Category"
+                      description={`Delete ${category.name}? Eggs in this category will be moved to Other.`}
+                      confirmText="Delete"
+                      variant="destructive"
+                      onConfirm={() => deleteCategoryMutation.mutate(category)}
+                      trigger={
+                        <Button variant="ghost" size="sm" disabled={isDeleting} className="text-red-400 hover:text-red-300 hover:bg-red-500/10">
+                          {isDeleting ? (
+                            <>
+                              <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
+                              Deleting...
+                            </>
+                          ) : (
+                            <>
+                              <X className="w-4 h-4 mr-2" />
+                              Delete
+                            </>
+                          )}
+                        </Button>
+                      }
+                    />
+                  )}
+                </div>
+                );
+              })}
             </div>
           </div>
 
           <DialogFooter>
-            <Button variant="outline" onClick={() => setIsCategoryDialogOpen(false)}>
+            <Button variant="outline" onClick={() => setIsManageCategoriesOpen(false)}>
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Disable Egg Confirmation Dialog */}
+      <Dialog open={!!pendingDisableEgg} onOpenChange={(open) => !open && setPendingDisableEgg(null)}>
+        <DialogContent className="bg-[#0a0a0a] border-neutral-800">
+          <DialogHeader>
+            <DialogTitle className="text-white">Disable Egg?</DialogTitle>
+            <DialogDescription>
+              Are you sure you want to disable {pendingDisableEgg?.name}? Users will no longer be able to create servers with this egg.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPendingDisableEgg(null)}>
               Cancel
             </Button>
             <Button
-              onClick={() => createCategoryMutation.mutate(newCategory)}
-              disabled={!newCategory.id || !newCategory.name || createCategoryMutation.isLoading}
+              variant="destructive"
+              onClick={() => {
+                if (pendingDisableEgg?.id) {
+                  toggleMutation.mutate(pendingDisableEgg.id);
+                }
+                setPendingDisableEgg(null);
+              }}
+              disabled={toggleMutation.isLoading}
             >
-              {createCategoryMutation.isLoading ? (
-                <>
-                  <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
-                  Creating...
-                </>
-              ) : (
-                'Create Category'
-              )}
+              {toggleMutation.isLoading ? 'Disabling...' : 'Disable'}
             </Button>
           </DialogFooter>
         </DialogContent>

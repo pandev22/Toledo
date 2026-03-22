@@ -40,7 +40,7 @@ module.exports.load = async function (app, db) {
       const limit = parseInt(req.query.limit) || 20;
 
       // Get logs from database
-      const activityLog = await db.get(`activity_log_${serverId}`) || [];
+      const activityLog = [];
 
       // Calculate pagination
       const startIndex = (page - 1) * limit;

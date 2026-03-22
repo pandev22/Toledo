@@ -11,16 +11,7 @@ import {
 } from '@heroicons/react/24/outline';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Badge } from "@/components/ui/badge";
-
-// Utility function to format bytes
-function formatBytes(bytes, decimals = 2) {
-  if (bytes === 0) return '∞';
-  const k = 1024;
-  const dm = decimals < 0 ? 0 : decimals;
-  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
-}
+import { formatBytes } from '@/lib/format';
 
 function CreateServerModal({ isOpen, onClose }) {
   const [step, setStep] = useState(1);
@@ -82,7 +73,9 @@ function CreateServerModal({ isOpen, onClose }) {
 
   const selectedEgg = Array.isArray(eggs) ? eggs.find(e => e.id === egg) : null;
   const selectedLocation = Array.isArray(locations) ? locations.find(l => l.id === location) : null;
-  const filteredNodes = Array.isArray(nodes) ? nodes.filter(n => n.locationId.toString() === selectedLocation?.id.toString()) : [];
+  const filteredNodes = Array.isArray(nodes)
+    ? nodes.filter((n) => n.locationId?.toString() === selectedLocation?.id?.toString())
+    : [];
 
   // Handle clicks outside dropdowns
   useEffect(() => {

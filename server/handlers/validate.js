@@ -385,6 +385,10 @@ const schemas = {
     })
   }),
 
+  twoFactorDisable: z.object({
+    currentPassword: z.string({ required_error: 'Current password is required' }).min(1, 'Current password is required')
+  }),
+
   // Password change (with current password)
   passwordChange: z.object({
     currentPassword: z.string({ required_error: 'Current password is required' }).min(1),
@@ -499,9 +503,9 @@ const schemas = {
 
   // 2FA verification
   twoFactorVerify: z.object({
-    token: z.string({ required_error: 'Token is required' })
-      .length(6, 'Token must be exactly 6 digits')
-      .regex(/^\d+$/, 'Token must contain only digits'),
+    code: z.string({ required_error: 'Code is required' })
+      .length(6, 'Code must be exactly 6 digits')
+      .regex(/^\d+$/, 'Code must contain only digits'),
     secret: z.string({ required_error: 'Secret is required' }).min(1, 'Secret cannot be empty')
   }),
 
@@ -579,11 +583,6 @@ const schemas = {
     })
   }),
 
-  // Store renewal bypass
-  renewalBypass: z.object({
-    serverId: z.string({ required_error: 'Server ID is required' }).min(1).trim()
-  }),
-
   // Auth 2FA verify (for login flow)
   auth2FAVerify: z.object({
     token: z.string({ required_error: 'Token is required' })
@@ -608,6 +607,12 @@ const schemas = {
     platform: z.enum(['spigot', 'modrinth', 'hangar'], {
       errorMap: () => ({ message: 'Platform must be: spigot, modrinth, or hangar' })
     }).optional()
+  }),
+
+  // Plugin untrack
+  pluginUntrack: z.object({
+    pluginId: z.string({ required_error: 'Plugin ID is required' }).min(1).trim(),
+    platform: z.string({ required_error: 'Platform is required' }).min(1).trim()
   }),
 
   // 2FA login verification (accepts TOTP or backup codes)

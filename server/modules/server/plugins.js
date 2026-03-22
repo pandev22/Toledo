@@ -35,6 +35,75 @@ module.exports.load = async function (app, db) {
   const BUKKIT_API_BASE = "https://dev.bukkit.org/api";
   const MODRINTH_API_BASE = "https://api.modrinth.com/v2";
 
+  const normalizeSpigotIconUrl = (url) => {
+    if (!url) {
+      return null;
+    }
+
+    if (/^https?:\/\//i.test(url)) {
+      return url;
+    }
+
+    return `https://www.spigotmc.org/${url.replace(/^\/+/, "")}`;
+  };
+
+  const getServerFilesList = async (serverId, directory) => {
+    const response = await axios.get(
+      `${PANEL_URL}/api/client/servers/${serverId}/files/list`,
+      {
+        params: { directory },
+        headers: {
+          Authorization: `Bearer ${API_KEY}`,
+          Accept: "application/json",
+        },
+      }
+    );
+
+    return Array.isArray(response.data?.data) ? response.data.data : [];
+  };
+
+  const getPluginDirectoryFiles = async (serverId) => {
+    try {
+      return await getServerFilesList(serverId, "/plugins");
+    } catch (error) {
+      const status = error.response?.status;
+
+      if (status !== 404 && status !== 500) {
+        throw error;
+      }
+
+      const rootEntries = await getServerFilesList(serverId, "/");
+      const hasPluginsDirectory = rootEntries.some((entry) => {
+        const attributes = entry?.attributes;
+        return attributes?.name === "plugins" && attributes?.is_file === false;
+      });
+
+      if (!hasPluginsDirectory) {
+        return [];
+      }
+
+      throw error;
+    }
+  };
+
+  const getInstalledPluginExternalUrl = (pluginId, platform) => {
+    if (platform === 'spigot') {
+      return `https://www.spigotmc.org/resources/${pluginId}`;
+    }
+
+    return null;
+  };
+
+  const serializeInstalledPlugin = (plugin) => ({
+    id: plugin.pluginId,
+    name: plugin.name,
+    pluginName: plugin.pluginName,
+    platform: plugin.platform,
+    installedAt: plugin.installedAt.toISOString(),
+    manuallyAdded: plugin.manuallyAdded,
+    external_url: getInstalledPluginExternalUrl(plugin.pluginId, plugin.platform)
+  });
+
   // Cache mechanism to reduce API calls
   const cache = {
     plugins: {},
@@ -152,7 +221,7 @@ module.exports.load = async function (app, db) {
           },
           downloads: plugin.downloads || 0,
           rating: plugin.rating || { average: 0 },
-          icon: plugin.icon?.url || null,
+          icon: normalizeSpigotIconUrl(plugin.icon?.url),
           premium: plugin.premium || false,
           price: plugin.price || null,
           author: {
@@ -264,7 +333,7 @@ module.exports.load = async function (app, db) {
           },
           downloads: plugin.downloads || 0,
           rating: plugin.rating || { average: 0 },
-          icon: plugin.icon?.url || null,
+          icon: normalizeSpigotIconUrl(plugin.icon?.url),
           premium: plugin.premium || false,
           price: plugin.price || null,
           author: {
@@ -365,7 +434,7 @@ module.exports.load = async function (app, db) {
           })),
           downloads: detailsResponse.data.downloads || 0,
           rating: detailsResponse.data.rating || { average: 0 },
-          icon: detailsResponse.data.icon?.url || null,
+          icon: normalizeSpigotIconUrl(detailsResponse.data.icon?.url),
           premium: detailsResponse.data.premium || false,
           price: detailsResponse.data.price || null,
           author: {
@@ -433,21 +502,8 @@ module.exports.load = async function (app, db) {
 
     try {
       // Get file listing from Pterodactyl
-      const response = await axios.get(
-        `${PANEL_URL}/api/client/servers/${serverId}/files/list`,
-        {
-          params: {
-            directory: '/plugins'
-          },
-          headers: {
-            Authorization: `Bearer ${API_KEY}`,
-            Accept: "application/json",
-          },
-        }
-      );
-
       // Extract .jar files
-      const pluginFiles = response.data.data
+      const pluginFiles = (await getPluginDirectoryFiles(serverId))
         .filter(file => file.attributes.name.endsWith('.jar'))
         .map(file => ({
           name: file.attributes.name.replace(/\.jar$/, ''),
@@ -458,8 +514,8 @@ module.exports.load = async function (app, db) {
       // Get current installed plugins from DB
       let installedPlugins = [];
       if (db) {
-        const stored = db.get(`servers.${serverId}.plugins`);
-        installedPlugins = Array.isArray(stored) ? stored : [];
+        const plugins = await db.installedPlugin.findMany({ where: { serverId } });
+        installedPlugins = plugins.map(serializeInstalledPlugin);
       }
 
       // Add plugin files not already in DB
@@ -472,22 +528,28 @@ module.exports.load = async function (app, db) {
         );
 
         if (!isTracked) {
-          installedPlugins.push({
-            id: `manual-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-            name: file.name,
-            platform: 'manual',
-            installedAt: file.modified || new Date().toISOString(),
-            manuallyAdded: true
-          });
+          if (db) {
+            await db.installedPlugin.create({
+              data: {
+                serverId,
+                pluginId: `manual-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+                name: file.name,
+                pluginName: file.name,
+                platform: 'manual',
+                installedAt: file.modified ? new Date(file.modified) : new Date(),
+                manuallyAdded: true
+              }
+            });
+          }
           added++;
         }
       }
 
-      // Update the DB
+      // Re-fetch installed plugins after potential additions
       if (db && added > 0) {
-        db.set(`servers.${serverId}.plugins`, installedPlugins);
+        const plugins = await db.installedPlugin.findMany({ where: { serverId } });
+        installedPlugins = plugins.map(serializeInstalledPlugin);
       }
-
       res.json({
         success: true,
         message: `Scanned plugins directory and found ${pluginFiles.length} plugin files. Added ${added} new plugins to tracking.`,
@@ -502,6 +564,8 @@ module.exports.load = async function (app, db) {
       });
     }
   });
+
+
 
   // POST /api/plugins/install/:serverId - Install plugin
   router.post("/plugins/install/:serverId", isAuthenticated, ownsServer, validate(schemas.pluginInstall), async (req, res) => {
@@ -611,38 +675,34 @@ module.exports.load = async function (app, db) {
 
       if (db) {
         try {
-          // Get existing plugins or initialize empty array if doesn't exist or invalid
-          let installedPlugins = db.get(`servers.${serverId}.plugins`);
-          if (!Array.isArray(installedPlugins)) {
-            installedPlugins = [];
-          }
-
-          // Only add if not already tracked
           const pluginIdentifier = String(pluginId);
           const platformName = String(platform);
 
-          // Check if already installed using both id and name
-          const isAlreadyInstalled = installedPlugins.some(p =>
-            p && ((p.id === pluginIdentifier && p.platform === platformName) ||
-              (p.name.toLowerCase() === pluginName.toLowerCase()))
-          );
-
-          if (!isAlreadyInstalled) {
-            installedPlugins.push({
-              id: pluginIdentifier,
+          await db.installedPlugin.upsert({
+            where: {
+              serverId_pluginId_platform: {
+                serverId,
+                pluginId: pluginIdentifier,
+                platform: platformName
+              }
+            },
+            update: {
               name: pluginName,
-              pluginName: pluginName, // Add both for compatibility
+              pluginName: pluginName
+            },
+            create: {
+              serverId,
+              pluginId: pluginIdentifier,
+              name: pluginName,
+              pluginName: pluginName,
               platform: platformName,
-              installedAt: new Date().toISOString()
-            });
-
-            db.set(`servers.${serverId}.plugins`, installedPlugins);
-          }
+              manuallyAdded: false
+            }
+          });
         } catch (dbError) {
           console.error("Error tracking plugin installation in database:", dbError);
         }
       }
-
       res.json({
         success: true,
         message: "Plugin installed successfully",
@@ -666,9 +726,8 @@ module.exports.load = async function (app, db) {
       // Check DB for installed plugins
       let installedPlugins = [];
       if (db) {
-        const storedPlugins = db.get(`servers.${serverId}.plugins`);
-        // Ensure we always return an array even if DB value is invalid
-        installedPlugins = Array.isArray(storedPlugins) ? storedPlugins : [];
+        const plugins = await db.installedPlugin.findMany({ where: { serverId } });
+        installedPlugins = plugins.map(serializeInstalledPlugin);
       }
 
       // Return the list of installed plugins
@@ -677,6 +736,46 @@ module.exports.load = async function (app, db) {
       console.error("Error fetching installed plugins:", error);
       // Return empty array on error instead of error message
       res.json([]);
+    }
+  });
+
+  router.delete("/plugins/untrack/:serverId", isAuthenticated, ownsServer, validate(schemas.pluginUntrack), async (req, res) => {
+    const { serverId } = req.params;
+    const { pluginId, platform } = req.body;
+
+    try {
+      if (!db) {
+        return res.status(503).json({
+          success: false,
+          error: "Plugin tracking database is unavailable"
+        });
+      }
+
+      const result = await db.installedPlugin.deleteMany({
+        where: {
+          serverId,
+          pluginId,
+          platform
+        }
+      });
+
+      if (result.count === 0) {
+        return res.status(404).json({
+          success: false,
+          error: "Plugin tracking entry not found"
+        });
+      }
+
+      res.json({
+        success: true,
+        message: "Plugin untracked successfully"
+      });
+    } catch (error) {
+      console.error("Error untracking plugin:", error);
+      res.status(500).json({
+        success: false,
+        error: "Failed to untrack plugin"
+      });
     }
   });
 

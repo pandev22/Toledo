@@ -3,7 +3,6 @@
 const fs = require("fs").promises;
 const path = require("path");
 const https = require("https");
-const os = require("os");
 const { exec } = require("child_process");
 const { promisify } = require("util");
 const execAsync = promisify(exec);
@@ -38,8 +37,8 @@ async function checkAdminStatus(req, res, db) {
   }
 
   try {
-    const userId = await db.get("users-" + req.session.userinfo.id);
-    const response = await pteroApi.get(`/api/application/users/${userId}?include=servers`);
+    const pterodactylId = (await db.user.findUnique({ where: { id: req.session.userinfo.id }, select: { pterodactylId: true } }))?.pterodactylId;
+    const response = await pteroApi.get(`/api/application/users/${pterodactylId}?include=servers`);
     const isAdmin = response.data.attributes.root_admin === true;
 
     req.session[cacheKey] = {
@@ -54,8 +53,10 @@ async function checkAdminStatus(req, res, db) {
   }
 }
 
-const HeliactylModule = {
+
+  const HeliactylModule = {
   name: "Updater",
+
   version: "1.0.0",
   api_level: 4,
   target_platform: "10.0.0",
@@ -76,8 +77,7 @@ const HeliactylModule = {
 
 // DB keys
 const DB_KEYS = {
-  config: "updater:config",
-  servers: "updater:servers"
+  config: "updater:config"
 };
 
 // Default config (stored in DB, editable via admin UI)
@@ -144,7 +144,6 @@ class UpdateManager {
     this.serverDir = path.join(__dirname, "..");
     this.frontendDir = path.join(__dirname, "..", "..", "frontend");
     this.updating = false;
-    this.hostname = os.hostname();
 
     try {
       this.currentVersion = require("../app").VERSION || settings.version || "0.0.0";
@@ -180,20 +179,18 @@ class UpdateManager {
     const config = await this.getConfig();
     logger.info(`Auto-updater initialized (v${this.currentVersion}, enabled: ${config.enabled})`);
 
-    await this.registerServer();
-
     if (config.enabled) {
       setTimeout(() => this.checkForUpdates(), 10_000);
       setInterval(() => this.checkForUpdates(), config.checkInterval * 60 * 1000);
     }
 
-    setInterval(() => this.registerServer(), 30_000);
     this.setupRoutes(app);
   }
 
   async getConfig() {
     try {
-      const config = await this.db.get(DB_KEYS.config);
+      const row = await this.db.heliactyl.findUnique({ where: { key: DB_KEYS.config } });
+      const config = row ? JSON.parse(row.value) : null;
       return config ? { ...DEFAULT_CONFIG, ...config } : DEFAULT_CONFIG;
     } catch {
       return DEFAULT_CONFIG;
@@ -203,91 +200,12 @@ class UpdateManager {
   async setConfig(newConfig) {
     const current = await this.getConfig();
     const merged = { ...current, ...newConfig };
-    await this.db.set(DB_KEYS.config, merged);
+    await this.db.heliactyl.upsert({
+      where: { key: DB_KEYS.config },
+      update: { value: JSON.stringify(merged) },
+      create: { key: DB_KEYS.config, value: JSON.stringify(merged) }
+    });
     return merged;
-  }
-
-  async registerServer() {
-    try {
-      const servers = (await this.db.get(DB_KEYS.servers)) || {};
-      // Preserve existing nickname if server was already registered
-      const existingServer = servers[this.hostname];
-      servers[this.hostname] = {
-        hostname: this.hostname,
-        name: existingServer?.name || this.hostname, // Nickname, defaults to hostname
-        version: this.currentVersion,
-        updatedAt: Date.now(),
-        updating: this.updating
-      };
-      await this.db.set(DB_KEYS.servers, servers);
-    } catch (error) {
-      logger.error("Failed to register server:", error);
-    }
-  }
-
-  async getServers() {
-    try {
-      const servers = (await this.db.get(DB_KEYS.servers)) || {};
-      const now = Date.now();
-      const ONLINE_THRESHOLD = 30 * 60 * 1000; // 30 minutes - consider offline if no heartbeat
-      const CLEANUP_THRESHOLD = 72 * 60 * 60 * 1000; // 72 hours - remove stale entries
-      
-      // Clean up servers that haven't responded in a very long time (72h+)
-      const cleanedServers = {};
-      for (const [hostname, data] of Object.entries(servers)) {
-        const timeSinceUpdate = now - (data.updatedAt || 0);
-        if (timeSinceUpdate < CLEANUP_THRESHOLD) {
-          cleanedServers[hostname] = {
-            ...data,
-            // Calculate online status based on heartbeat
-            online: timeSinceUpdate < ONLINE_THRESHOLD
-          };
-        } else {
-          logger.info(`Removing stale server entry: ${hostname} (last seen ${Math.round(timeSinceUpdate / 1000 / 60 / 60)} hours ago)`);
-        }
-      }
-      
-      // Save cleaned servers if any were removed
-      if (Object.keys(cleanedServers).length !== Object.keys(servers).length) {
-        await this.db.set(DB_KEYS.servers, cleanedServers);
-      }
-      
-      return Object.values(cleanedServers);
-    } catch {
-      return [];
-    }
-  }
-
-  // Update server nickname
-  async updateServerName(hostname, name) {
-    try {
-      const servers = (await this.db.get(DB_KEYS.servers)) || {};
-      if (servers[hostname]) {
-        servers[hostname].name = name || hostname;
-        await this.db.set(DB_KEYS.servers, servers);
-        return true;
-      }
-      return false;
-    } catch (error) {
-      logger.error("Failed to update server name:", error);
-      return false;
-    }
-  }
-
-  // Delete a server entry manually
-  async deleteServer(hostname) {
-    try {
-      const servers = (await this.db.get(DB_KEYS.servers)) || {};
-      if (servers[hostname]) {
-        delete servers[hostname];
-        await this.db.set(DB_KEYS.servers, servers);
-        return true;
-      }
-      return false;
-    } catch (error) {
-      logger.error("Failed to delete server:", error);
-      return false;
-    }
   }
 
   setupRoutes(app) {
@@ -324,21 +242,12 @@ class UpdateManager {
           }
         }
 
-        // Handle webhook secret - check if masked (all asterisks) or explicitly empty string
-        // ROBUSTNESS NOTE: The masking pattern (all asterisks) is safe because:
-        // 1. Secrets are sent from frontend already masked (they never leave the server)
-        // 2. If a user provides a new secret, it's a string that won't be all asterisks (highly unlikely for a real secret)
-        // 3. The regex /^\*+$/ specifically matches ONLY strings of asterisks, not real secrets
-        // 4. If somehow a user had a secret that WAS all asterisks (edge case), they'd need to clear and reset it
         let newSecret;
         if (webhookSecret === "") {
-          // Explicitly clearing the secret
           newSecret = "";
         } else if (webhookSecret && /^\*+$/.test(webhookSecret)) {
-          // Masked value - keep current (user didn't change it, just viewing)
           newSecret = current.webhookSecret;
         } else {
-          // New value provided (actual secret, not masked)
           newSecret = webhookSecret;
         }
 
@@ -381,50 +290,6 @@ class UpdateManager {
       if (this.updating) return res.status(409).json({ error: "Update already in progress" });
       res.json({ status: "checking" });
       this.checkForUpdates();
-    });
-
-    app.get("/api/admin/updater/servers", async (req, res) => {
-      if (!await checkAdminStatus(req, res, this.db)) return res.status(403).json({ error: "Forbidden" });
-      const servers = await this.getServers();
-      res.json(servers);
-    });
-
-    // Update server nickname
-    app.patch("/api/admin/updater/servers/:hostname", async (req, res) => {
-      if (!await checkAdminStatus(req, res, this.db)) return res.status(403).json({ error: "Forbidden" });
-      try {
-        const { hostname } = req.params;
-        const { name } = req.body;
-        
-        if (!name || typeof name !== 'string' || name.trim().length === 0) {
-          return res.status(400).json({ error: "Name must be a non-empty string" });
-        }
-        
-        const success = await this.updateServerName(hostname, name.trim());
-        if (success) {
-          res.json({ success: true, message: `Server "${hostname}" renamed to "${name.trim()}"` });
-        } else {
-          res.status(404).json({ error: "Server not found" });
-        }
-      } catch (error) {
-        res.status(500).json({ error: error.message });
-      }
-    });
-
-    // Delete server entry manually
-    app.delete("/api/admin/updater/servers/:hostname", async (req, res) => {
-      if (!await checkAdminStatus(req, res, this.db)) return res.status(403).json({ error: "Forbidden" });
-      try {
-        const { hostname } = req.params;
-        const success = await this.deleteServer(hostname);
-        if (success) {
-          res.json({ success: true, message: `Server "${hostname}" deleted` });
-        } else {
-          res.status(404).json({ error: "Server not found" });
-        }
-      } catch (error) {
-        res.status(500).json({ error: error.message });
-      }
     });
 
     app.post("/api/webhooks/github", async (req, res) => {
@@ -495,7 +360,6 @@ class UpdateManager {
   async performUpdate(release) {
     if (this.updating) return;
     this.updating = true;
-    await this.registerServer();
 
     const config = await this.getConfig();
     
@@ -506,7 +370,6 @@ class UpdateManager {
     } catch (error) {
       logger.error("Invalid release tag:", error.message);
       this.updating = false;
-      await this.registerServer();
       throw error;
     }
     
@@ -549,7 +412,6 @@ class UpdateManager {
     } catch (error) {
       logger.error("Update failed:", error);
       this.updating = false;
-      await this.registerServer();
 
       const backupExists = await fs.access(backupDir).then(() => true).catch(() => false);
       if (backupExists) {

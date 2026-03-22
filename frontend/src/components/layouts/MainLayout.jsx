@@ -213,6 +213,7 @@ const [userDropdownOpen, setUserDropdownOpen] = useState(false);
 
   const adminNavItems = [
     { icon: WindowIcon, label: 'Overview', path: '/admin/overview' },
+    { icon: ServerIcon, label: 'Servers', path: '/admin/servers' },
     { icon: UsersIcon, label: 'Users', path: '/admin/users' },
     { icon: ServerStackIcon, label: 'Nodes', path: '/admin/nodes' },
     { icon: CubeIcon, label: 'Eggs', path: '/admin/eggs' },

@@ -5,7 +5,7 @@ import axios from 'axios';
 import {
   Settings, Save, RefreshCw, AlignLeft, Variable, PowerOff,
   Server, AlertTriangle, CheckCircle2, Terminal, Loader2, LogOut,
-  Trash2, AlertCircle
+  Trash2, AlertCircle, X
 } from 'lucide-react';
 import {
   Card, CardContent, CardDescription, CardHeader, CardTitle,
@@ -22,7 +22,9 @@ import {
   AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { toast } from "sonner";
+import { useToast } from "@/hooks/use-toast";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { showApiErrorToast } from '@/lib/api';
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
@@ -31,10 +33,9 @@ import { Separator } from "@/components/ui/separator";
 const SettingsPage = () => {
   const navigate = useNavigate();
   const { id } = useParams();
+  const { toast } = useToast();
   const queryClient = useQueryClient();
-  const [showReinstallDialog, setShowReinstallDialog] = useState(false);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
-  const [showLogoutDialog, setShowLogoutDialog] = useState(false);
   const [serverName, setServerName] = useState('');
   const [editedVariables, setEditedVariables] = useState({});
   const [editedStartup, setEditedStartup] = useState({
@@ -77,11 +78,11 @@ const SettingsPage = () => {
     },
     onSuccess: () => {
       queryClient.invalidateQueries(['server', id, 'startup']);
-      toast.success("Variables updated successfully");
+      toast({ title: "Success", description: "Variables updated successfully" });
       setEditedVariables({});
     },
     onError: (error) => {
-      toast.error(error.response?.data?.error || "Failed to update variables");
+      showApiErrorToast(toast, error, 'Failed to update variables');
     }
   });
 
@@ -93,7 +94,7 @@ const SettingsPage = () => {
     if (response.ok) navigate('/auth');
   };
 
-  // Update startup configuration mutation with logout modal
+  // Update startup configuration mutation
   const updateStartup = useMutation({
     mutationFn: async (config) => {
       const internalId = serverData?.attributes?.internal_id;
@@ -103,11 +104,18 @@ const SettingsPage = () => {
     onSuccess: () => {
       queryClient.invalidateQueries(['server', id]);
       queryClient.invalidateQueries(['server', id, 'startup']);
-      toast.success("Startup configuration updated successfully");
-      setShowLogoutDialog(true);
+      toast({ 
+        title: "Success", 
+        description: "Startup configuration updated successfully. A re-login is required to apply changes.",
+        action: (
+          <Button size="sm" variant="outline" onClick={handleLogout} className="bg-white text-black hover:bg-neutral-200">
+            Logout Now
+          </Button>
+        )
+      });
     },
     onError: (error) => {
-      toast.error(error.response?.data?.error || "Failed to update startup configuration");
+      showApiErrorToast(toast, error, 'Failed to update startup configuration');
     }
   });
 
@@ -117,11 +125,10 @@ const SettingsPage = () => {
       await axios.post(`/api/server/${id}/reinstall`);
     },
     onSuccess: () => {
-      toast.success("Server reinstallation initiated");
-      setShowReinstallDialog(false);
+      toast({ title: "Success", description: "Server reinstallation initiated" });
     },
     onError: (error) => {
-      toast.error(error.response?.data?.error || "Failed to reinstall server");
+      showApiErrorToast(toast, error, 'Failed to reinstall server');
     }
   });
 
@@ -132,11 +139,11 @@ const SettingsPage = () => {
       await axios.delete(`/api/v5/servers/${serverId}`);
     },
     onSuccess: () => {
-      toast.success("Server deleted successfully");
+      toast({ title: "Success", description: "Server deleted successfully" });
       navigate('/dashboard'); // Redirect to dashboard after deletion
     },
     onError: (error) => {
-      toast.error(error.response?.data?.error || "Failed to delete server");
+      showApiErrorToast(toast, error, 'Failed to delete server');
     }
   });
 
@@ -147,10 +154,10 @@ const SettingsPage = () => {
     },
     onSuccess: () => {
       queryClient.invalidateQueries(['server', id]);
-      toast.success("Server renamed successfully");
+      toast({ title: "Success", description: "Server renamed successfully" });
     },
     onError: (error) => {
-      toast.error(error.response?.data?.error || "Failed to rename server");
+      showApiErrorToast(toast, error, 'Failed to rename server');
     }
   });
 
@@ -253,9 +260,9 @@ const SettingsPage = () => {
                     />
                     <Button
                       type="submit"
-                      disabled={!serverName.trim() || serverName === server.name || renameServer.isLoading}
+                      disabled={!serverName.trim() || serverName === server.name || renameServer.isPending}
                     >
-                      {renameServer.isLoading ? (
+                      {renameServer.isPending ? (
                         <Loader2 className="w-4 h-4 mr-2 animate-spin" />
                       ) : (
                         <Save className="w-4 h-4 mr-2" />
@@ -276,19 +283,27 @@ const SettingsPage = () => {
                       <p className="text-sm text-neutral-400">
                         This will reinstall the server with default settings, but may preserve some files.
                       </p>
-                      <Button
+                      <ConfirmDialog
+                        title="Are you absolutely sure?"
+                        description="This action will reinstall your server. All data will be lost and cannot be recovered."
+                        confirmText="Reinstall Server"
                         variant="destructive"
-                        onClick={() => setShowReinstallDialog(true)}
-                        disabled={reinstallServer.isLoading}
-                        className="mt-2"
-                      >
-                        {reinstallServer.isLoading ? (
-                          <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                        ) : (
-                          <PowerOff className="w-4 h-4 mr-2" />
-                        )}
-                        Reinstall Server
-                      </Button>
+                        onConfirm={() => reinstallServer.mutate()}
+                        trigger={
+                          <Button
+                            variant="destructive"
+                            disabled={reinstallServer.isPending}
+                            className="mt-2"
+                          >
+                            {reinstallServer.isPending ? (
+                              <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                            ) : (
+                              <PowerOff className="w-4 h-4 mr-2" />
+                            )}
+                            Reinstall Server
+                          </Button>
+                        }
+                      />
                     </div>
 
                     <div className="space-y-2">
@@ -299,10 +314,10 @@ const SettingsPage = () => {
                       <Button
                         variant="destructive"
                         onClick={() => setShowDeleteDialog(true)}
-                        disabled={deleteServer.isLoading}
+                        disabled={deleteServer.isPending}
                         className="mt-2"
                       >
-                        {deleteServer.isLoading ? (
+                        {deleteServer.isPending ? (
                           <Loader2 className="w-4 h-4 mr-2 animate-spin" />
                         ) : (
                           <Trash2 className="w-4 h-4 mr-2" />
@@ -356,17 +371,24 @@ const SettingsPage = () => {
                 </div>
 
                 <div className="flex justify-end mt-4">
-                  <Button
-                    onClick={handleSaveStartup}
-                    disabled={!hasStartupChanges || updateStartup.isLoading}
-                  >
-                    {updateStartup.isLoading ? (
-                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                    ) : (
-                      <Save className="w-4 h-4 mr-2" />
-                    )}
-                    Save Changes
-                  </Button>
+                  <ConfirmDialog
+                    title="Save Startup Changes?"
+                    description="Updating startup configuration might require a restart. Proceed?"
+                    confirmText="Save Changes"
+                    onConfirm={handleSaveStartup}
+                    trigger={
+                      <Button
+                        disabled={!hasStartupChanges || updateStartup.isPending}
+                      >
+                        {updateStartup.isPending ? (
+                          <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                        ) : (
+                          <Save className="w-4 h-4 mr-2" />
+                        )}
+                        Save Changes
+                      </Button>
+                    }
+                  />
                 </div>
               </div>
             </CardContent>
@@ -384,9 +406,9 @@ const SettingsPage = () => {
               </div>
               <Button
                 onClick={handleSaveVariables}
-                disabled={Object.keys(editedVariables).length === 0 || updateVariables.isLoading}
+                disabled={Object.keys(editedVariables).length === 0 || updateVariables.isPending}
               >
-                {updateVariables.isLoading ? (
+                {updateVariables.isPending ? (
                   <Loader2 className="w-4 h-4 mr-2 animate-spin" />
                 ) : (
                   <Save className="w-4 h-4 mr-2" />
@@ -429,66 +451,24 @@ const SettingsPage = () => {
         </TabsContent>
       </Tabs>
 
-      {/* Logout Dialog */}
-      <AlertDialog open={showLogoutDialog} onOpenChange={setShowLogoutDialog}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Re-Login Required</AlertDialogTitle>
-            <AlertDialogDescription>
-              To apply the startup configuration changes, you need to log out and log back in. This will refresh your server information.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogAction
-              onClick={handleLogout}
-              className="bg-gray-800 hover:bg-gray-700"
-            >
-              <LogOut className="w-4 h-4 mr-2" />
-              Logout Now
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-
-      {/* Reinstall Dialog */}
-      <AlertDialog open={showReinstallDialog} onOpenChange={setShowReinstallDialog}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Are you absolutely sure?</AlertDialogTitle>
-            <AlertDialogDescription>
-              This action will reinstall your server. All data will be lost and cannot be recovered.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => reinstallServer.mutate()}
-              className="bg-red-600 hover:bg-red-700"
-            >
-              Reinstall Server
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-
       {/* Delete Server Dialog */}
       <AlertDialog open={showDeleteDialog} onOpenChange={(open) => {
         setShowDeleteDialog(open);
         if (!open) setDeleteConfirmation('');
       }}>
-        <AlertDialogContent>
+        <AlertDialogContent className="bg-neutral-950 border border-neutral-800">
           <AlertDialogHeader>
-            <AlertDialogTitle className="text-gray-900 flex items-center gap-2">
+            <AlertDialogTitle className="text-white flex items-center gap-2">
               <AlertTriangle className="w-5 h-5 text-red-500" />
               Delete Server Permanently
             </AlertDialogTitle>
-            <AlertDialogDescription className="space-y-4 text-gray-600">
+            <AlertDialogDescription className="space-y-4 text-neutral-400">
               <p>
-                This action <span className="font-bold text-gray-900">cannot be undone</span>. This will permanently delete your server and all associated data, including worlds, configs, and plugins.
+                This action <span className="font-bold text-white">cannot be undone</span>. This will permanently delete your server and all associated data, including worlds, configs, and plugins.
               </p>
 
-              <div className="p-3 bg-blue-50 border border-blue-100 rounded-md text-blue-800 text-sm">
-                <p className="font-medium text-blue-900">What happens when you delete a server:</p>
+              <div className="p-3 bg-blue-500/10 border border-blue-500/20 rounded-md text-blue-400 text-sm">
+                <p className="font-medium text-blue-300">What happens when you delete a server:</p>
                 <ul className="list-disc list-inside mt-2 space-y-1">
                   <li>All server files and data will be permanently deleted</li>
                   <li>All allocated resources (RAM, CPU, Disk) will be returned</li>
@@ -497,29 +477,29 @@ const SettingsPage = () => {
               </div>
 
               <div className="pt-2">
-                <Label htmlFor="confirm" className="mb-2 block text-gray-800">
-                  Type <span className="font-bold text-gray-900">{serverName}</span> to confirm:
+                <Label htmlFor="confirm" className="mb-2 block text-neutral-300">
+                  Type <span className="font-bold text-white">{serverName}</span> to confirm:
                 </Label>
                 <Input
                   id="confirm"
                   value={deleteConfirmation}
                   onChange={(e) => setDeleteConfirmation(e.target.value)}
-                  className="border-gray-300 focus:border-gray-400 focus:ring-gray-400"
+                  className="bg-neutral-900 border-neutral-800 text-white"
                   placeholder={serverName}
                 />
               </div>
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel className="border-gray-200 text-gray-700 hover:bg-gray-100 hover:text-gray-900">
+            <AlertDialogCancel className="bg-transparent text-white border-neutral-700 hover:bg-neutral-800">
               Cancel
             </AlertDialogCancel>
             <AlertDialogAction
               onClick={handleDeleteConfirm}
-              disabled={deleteConfirmation !== serverName || deleteServer.isLoading}
-              className="bg-red-600 hover:bg-red-700 text-white focus:ring-red-500"
+              disabled={deleteConfirmation !== serverName || deleteServer.isPending}
+              className="bg-red-600 hover:bg-red-700 text-white"
             >
-              {deleteServer.isLoading ? (
+              {deleteServer.isPending ? (
                 <Loader2 className="w-4 h-4 mr-2 animate-spin" />
               ) : (
                 <Trash2 className="w-4 h-4 mr-2" />

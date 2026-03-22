@@ -1,16 +1,17 @@
 {/**
 
 Heliactyl Next - codename "Toledo"
-© 2024 Matt James and contributors
+© 2024-2026 Matt James and contributors
 
 */}
 
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import React from 'react'
 import ReactDOM from 'react-dom/client'
 import { BrowserRouter } from 'react-router-dom'
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { SettingsProvider } from './hooks/useSettings'
 import App from './App'
+import { Toaster } from './components/ui/toaster'
+import { SettingsProvider } from './hooks/useSettings'
 import './index.css'
 
 const queryClient = new QueryClient({
@@ -35,6 +36,7 @@ ReactDOM.createRoot(document.getElementById('heliactyl')).render(
       >
         <SettingsProvider>
           <App />
+          <Toaster />
         </SettingsProvider>
       </BrowserRouter>
     </QueryClientProvider>

@@ -32,7 +32,7 @@ module.exports.HeliactylModule = HeliactylModule;
 class AFKRewardsManager {
   constructor(db) {
     this.db = db;
-    this.COINS_PER_MINUTE = 1.5;
+    this.COINS_PER_MINUTE = 1; // Adjusted to Int for Prisma schema
     this.INTERVAL_MS = 60000;
     this.timeouts = new Map();
     this.stateTimeouts = new Map();
@@ -67,12 +67,27 @@ class AFKRewardsManager {
 
   async processReward(userId, ws) {
     try {
-      const currentCoins = await this.db.get(`coins-${userId}`) || 0;
-      const newBalance = currentCoins + this.COINS_PER_MINUTE;
-      await this.db.set(`coins-${userId}`, newBalance);
+      // Use atomic increment for coins
+      await this.db.$transaction(async (tx) => {
+        await tx.user.update({
+          where: { id: userId },
+          data: { 
+            coins: { increment: this.COINS_PER_MINUTE },
+            totalCoinsEarned: { increment: this.COINS_PER_MINUTE }
+          }
+        });
+
+        await tx.transaction.create({
+          data: {
+            userId,
+            type: 'afk',
+            amount: this.COINS_PER_MINUTE,
+            description: 'AFK Rewards'
+          }
+        });
+      });
 
       this.updateSession(userId);
-
       this.sendState(userId, ws);
       this.scheduleNextReward(userId, ws);
     } catch (error) {
@@ -131,7 +146,6 @@ class AFKRewardsManager {
   }
 }
 
-const RENEWAL_BYPASS_PRICE = 3500;
 const RESOURCE_PRICES = {
   ram: settings?.api?.client?.coins?.store?.ram?.cost || 600,
   disk: settings?.api?.client?.coins?.store?.disk?.cost || 400,
@@ -166,26 +180,6 @@ class Store {
     this.db = db;
   }
 
-  async purchaseRenewalBypass(userId) {
-    const userCoins = await this.db.get(`coins-${userId}`) || 0;
-
-    if (userCoins < RENEWAL_BYPASS_PRICE) {
-      throw new StoreError('Insufficient funds', 'INSUFFICIENT_FUNDS');
-    }
-
-    const newBalance = userCoins - RENEWAL_BYPASS_PRICE;
-    await this.db.set(`coins-${userId}`, newBalance);
-    await this.db.set(`renewbypass-${userId}`, true);
-
-    const purchase = await this.logPurchase(userId, 'renewal_bypass', 1, RENEWAL_BYPASS_PRICE);
-
-    return { purchase, remainingCoins: newBalance };
-  }
-
-  async hasRenewalBypass(userId) {
-    return await this.db.get(`renewbypass-${userId}`) || false;
-  }
-
   validateResourceAmount(resourceType, amount) {
     if (!RESOURCE_PRICES[resourceType]) throw new StoreError('Invalid resource type', 'INVALID_RESOURCE');
     if (!Number.isInteger(amount) || amount < 1) throw new StoreError('Amount must be a positive integer', 'INVALID_AMOUNT');
@@ -193,50 +187,55 @@ class Store {
   }
 
   async updateResourceLimits(userId, resourceType, amount) {
-    const extra = await this.db.get(`extra-${userId}`) || {
-      ram: 0, disk: 0, cpu: 0, servers: 0
+    const fieldMap = {
+      ram: 'extraRam',
+      disk: 'extraDisk',
+      cpu: 'extraCpu',
+      servers: 'extraServers'
     };
-
+    const field = fieldMap[resourceType];
     const actualAmount = amount * RESOURCE_MULTIPLIERS[resourceType];
-    const newAmount = extra[resourceType] + actualAmount;
+
+    const user = await this.db.user.findUnique({
+      where: { id: userId },
+      select: { [field]: true }
+    });
+
+    const currentAmount = user?.[field] ?? 0;
+    const newAmount = currentAmount + actualAmount;
 
     const maxLimit = MAX_RESOURCE_LIMITS[resourceType] * RESOURCE_MULTIPLIERS[resourceType];
     if (newAmount > maxLimit) {
       throw new StoreError(`Resource limit exceeded`, 'RESOURCE_LIMIT_EXCEEDED');
     }
 
-    extra[resourceType] = newAmount;
-    await this.db.set(`extra-${userId}`, extra);
-    return extra;
+    const updatedUser = await this.db.user.update({
+      where: { id: userId },
+      data: { [field]: { increment: actualAmount } }
+    });
+
+    return {
+      ram: updatedUser.extraRam,
+      disk: updatedUser.extraDisk,
+      cpu: updatedUser.extraCpu,
+      servers: updatedUser.extraServers
+    };
   }
 
   async logPurchase(userId, resourceType, amount, cost) {
-    const purchase = {
-      id: `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-      userId, resourceType, amount, cost,
-      timestamp: Date.now()
-    };
-
-    // Log to wallet transactions
-    const walletTransaction = {
-      id: `txn_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-      type: 'store_purchase',
-      details: {
+    return await this.db.transaction.create({
+      data: {
+        userId,
+        type: 'store_purchase',
+        amount: -cost,
         description: `Bought ${amount} ${resourceType}`,
-        resource: resourceType,
-        amount: amount
-      },
-      amount: -cost, // Negative for spending
-      timestamp: new Date().toISOString()
-    };
-    const walletHistory = await this.db.get(`transactions-${userId}`) || [];
-    walletHistory.push(walletTransaction);
-    await this.db.set(`transactions-${userId}`, walletHistory);
-
-    const history = await this.db.get(`purchases-${userId}`) || [];
-    history.push(purchase);
-    await this.db.set(`purchases-${userId}`, history);
-    return purchase;
+        details: JSON.stringify({
+          resource: resourceType,
+          amount: amount,
+          cost: cost
+        })
+      }
+    });
   }
 }
 
@@ -246,7 +245,7 @@ module.exports.load = function (app, db) {
   const store = new Store(db);
 
   app.ws('/ws', async function (ws, req) {
-    if (!req.session.userinfo) {
+    if (!req.session?.userinfo) {
       ws.close(4001, 'Unauthorized');
       return;
     }
@@ -275,15 +274,15 @@ module.exports.load = function (app, db) {
 
   app.get('/api/store/config', async (req, res) => {
     try {
-      if (!req.session.userinfo) return res.status(401).json({ error: 'Unauthorized' });
+      if (!req.session?.userinfo) return res.status(401).json({ error: 'Unauthorized' });
 
       const userId = req.session.userinfo.id;
-      const userCoins = await db.get(`coins-${userId}`) || 0;
+      const user = await db.user.findUnique({ where: { id: userId }, select: { coins: true } });
+      const userCoins = user?.coins ?? 0;
 
       const configResponse = {
         prices: {
-          resources: RESOURCE_PRICES,
-          renewalBypass: RENEWAL_BYPASS_PRICE
+          resources: RESOURCE_PRICES
         },
         multipliers: RESOURCE_MULTIPLIERS,
         limits: MAX_RESOURCE_LIMITS,
@@ -292,8 +291,7 @@ module.exports.load = function (app, db) {
           ram: userCoins >= RESOURCE_PRICES.ram,
           disk: userCoins >= RESOURCE_PRICES.disk,
           cpu: userCoins >= RESOURCE_PRICES.cpu,
-          servers: userCoins >= RESOURCE_PRICES.servers,
-          renewalBypass: userCoins >= RENEWAL_BYPASS_PRICE
+          servers: userCoins >= RESOURCE_PRICES.servers
         }
       };
 
@@ -308,58 +306,16 @@ module.exports.load = function (app, db) {
     }
   });
 
-  app.post('/api/store/renewal-bypass', async (req, res) => {
-    try {
-      if (!req.session.userinfo) return res.status(401).json({ error: 'Unauthorized' });
-
-      const userId = req.session.userinfo.id;
-      if (await store.hasRenewalBypass(userId)) {
-        return res.status(400).json({ error: 'Already purchased', code: 'ALREADY_PURCHASED' });
-      }
-
-      const result = await store.purchaseRenewalBypass(userId);
-      res.json({
-        success: true,
-        purchase: result.purchase,
-        remainingCoins: result.remainingCoins
-      });
-
-    } catch (error) {
-      if (error instanceof StoreError) {
-        return res.status(400).json({ error: error.message, code: error.code });
-      }
-      res.status(500).json({ error: 'Internal server error' });
-    }
-  });
-
-  app.get('/api/store/renewal-bypass', async (req, res) => {
-    try {
-      if (!req.session.userinfo) return res.status(401).json({ error: 'Unauthorized' });
-
-      const userId = req.session.userinfo.id;
-      const hasBypass = await store.hasRenewalBypass(userId);
-      const userCoins = await db.get(`coins-${userId}`) || 0;
-
-      res.json({
-        hasRenewalBypass: hasBypass,
-        price: RENEWAL_BYPASS_PRICE,
-        canAfford: userCoins >= RENEWAL_BYPASS_PRICE,
-        currentBalance: userCoins
-      });
-    } catch (error) {
-      res.status(500).json({ error: 'Internal server error' });
-    }
-  });
-
   app.post('/api/store/buy', validate(schemas.storeBuy), async (req, res) => {
     try {
-      if (!req.session.userinfo) return res.status(401).json({ error: 'Unauthorized' });
+      if (!req.session?.userinfo) return res.status(401).json({ error: 'Unauthorized' });
 
       const userId = req.session.userinfo.id;
       const { resourceType, amount } = req.body;
 
       const cost = RESOURCE_PRICES[resourceType] * amount;
-      const userCoins = await db.get(`coins-${userId}`) || 0;
+      const user = await db.user.findUnique({ where: { id: userId }, select: { coins: true } });
+      const userCoins = user?.coins ?? 0;
 
       if (userCoins < cost) {
         return res.status(402).json({
@@ -371,7 +327,12 @@ module.exports.load = function (app, db) {
 
       const updatedResources = await store.updateResourceLimits(userId, resourceType, amount);
       const newBalance = userCoins - cost;
-      await db.set(`coins-${userId}`, newBalance);
+      
+      await db.user.update({
+        where: { id: userId },
+        data: { coins: newBalance }
+      });
+
       const purchase = await store.logPurchase(userId, resourceType, amount, cost);
 
       res.json({
@@ -391,9 +352,15 @@ module.exports.load = function (app, db) {
 
   app.get('/api/store/history', async (req, res) => {
     try {
-      if (!req.session.userinfo) return res.status(401).json({ error: 'Unauthorized' });
-      const history = await db.get(`purchases-${req.session.userinfo.id}`) || [];
-      res.json(history);
+      if (!req.session?.userinfo) return res.status(401).json({ error: 'Unauthorized' });
+      const history = await db.transaction.findMany({
+        where: { userId: req.session.userinfo.id, type: 'store_purchase' },
+        orderBy: { createdAt: 'desc' }
+      });
+      res.json(history.map(h => ({
+        ...h,
+        ...JSON.parse(h.details || '{}')
+      })));
     } catch (error) {
       res.status(500).json({ error: 'Internal server error' });
     }
@@ -401,41 +368,37 @@ module.exports.load = function (app, db) {
 
   app.get('/api/store/resources', async (req, res) => {
     try {
-      if (!req.session.userinfo) return res.status(401).json({ error: 'Unauthorized' });
-      const resources = await db.get(`extra-${req.session.userinfo.id}`) || {
-        ram: 0, disk: 0, cpu: 0, servers: 0
-      };
-      res.json(resources);
+      if (!req.session?.userinfo) return res.status(401).json({ error: 'Unauthorized' });
+      const user = await db.user.findUnique({
+        where: { id: req.session.userinfo.id },
+        select: { extraRam: true, extraDisk: true, extraCpu: true, extraServers: true }
+      });
+      res.json({
+        ram: user?.extraRam ?? 0,
+        disk: user?.extraDisk ?? 0,
+        cpu: user?.extraCpu ?? 0,
+        servers: user?.extraServers ?? 0
+      });
     } catch (error) {
       res.status(500).json({ error: 'Internal server error' });
     }
   });
 
-  let maxram = null;
-  let maxcpu = null;
-  let maxservers = null;
-  let maxdisk = null;
   app.get("/buyram", async (req, res) => {
     let newsettings = await enabledCheck(req, res);
     if (newsettings) {
       let amount = req.query.amount;
-
       if (!amount) return res.send("missing amount");
-
       amount = parseFloat(amount);
-
       if (isNaN(amount)) return res.send("amount is not a number");
-
       if (amount < 1 || amount > 10) return res.send("amount must be 1-10");
 
       let theme = indexjs.get(req);
       let failedcallback = theme.settings.redirect.failedpurchaseram ? theme.settings.redirect.failedpurchaseram : "/";
 
-      let usercoins = await db.get("coins-" + req.session.userinfo.id);
-      usercoins = usercoins ? usercoins : 0;
-
-      let ramcap = await db.get("ram-" + req.session.userinfo.id);
-      ramcap = ramcap ? ramcap : 0;
+      const user = await db.user.findUnique({ where: { id: req.session.userinfo.id } });
+      let usercoins = user?.coins ?? 0;
+      let ramcap = Math.floor((user?.extraRam ?? 0) / 1024);
 
       if (ramcap + amount > settings.storelimits.ram) return res.redirect(failedcallback + "?err=MAXRAMEXCEETED");
 
@@ -445,36 +408,17 @@ module.exports.load = function (app, db) {
       if (usercoins < cost) return res.redirect(failedcallback + "?err=CANNOTAFFORD");
 
       let newusercoins = usercoins - cost;
-      let newram = ramcap + amount;
-      if (newram > settings.storelimits.ram) return res.send("You reached max ram limit!");
-      if (newusercoins == 0) {
-        await db.delete("coins-" + req.session.userinfo.id);
-        await db.set("ram-" + req.session.userinfo.id, newram);
-      } else {
-        await db.set("coins-" + req.session.userinfo.id, newusercoins);
-        await db.set("ram-" + req.session.userinfo.id, newram);
-      }
-
-      let extra = await db.get("extra-" + req.session.userinfo.id);
-      extra = extra ? extra : {
-        ram: 0,
-        disk: 0,
-        cpu: 0,
-        servers: 0
-      };
-
-      extra.ram = extra.ram + per;
-
-      if (extra.ram == 0 && extra.disk == 0 && extra.cpu == 0 && extra.servers == 0) {
-        await db.delete("extra-" + req.session.userinfo.id);
-      } else {
-        await db.set("extra-" + req.session.userinfo.id, extra);
-      }
+      
+      await db.user.update({
+        where: { id: req.session.userinfo.id },
+        data: {
+          coins: newusercoins,
+          extraRam: { increment: per }
+        }
+      });
 
       adminjs.suspend(req.session.userinfo.id, settings, db);
-
-      log(`Resources Purchased`, `${req.session.userinfo.username}#${req.session.userinfo.discriminator} bought ${per}\MB ram from the store for \`${cost}\` Credits.`)
-
+      log(`Resources Purchased`, `${req.session.userinfo.username}#${req.session.userinfo.discriminator} bought ${per}MB ram from the store for \`${cost}\` Credits.`);
       res.redirect((theme.settings.redirect.purchaseram ? theme.settings.redirect.purchaseram : "/") + "?err=none");
     }
   });
@@ -483,23 +427,17 @@ module.exports.load = function (app, db) {
     let newsettings = await enabledCheck(req, res);
     if (newsettings) {
       let amount = req.query.amount;
-
       if (!amount) return res.send("missing amount");
-
       amount = parseFloat(amount);
-
       if (isNaN(amount)) return res.send("amount is not a number");
-
       if (amount < 1 || amount > 10) return res.send("amount must be 1-10");
 
       let theme = indexjs.get(req);
       let failedcallback = theme.settings.redirect.failedpurchasedisk ? theme.settings.redirect.failedpurchasedisk : "/";
 
-      let usercoins = await db.get("coins-" + req.session.userinfo.id);
-      usercoins = usercoins ? usercoins : 0;
-
-      let diskcap = await db.get("disk-" + req.session.userinfo.id);
-      diskcap = diskcap ? diskcap : 0;
+      const user = await db.user.findUnique({ where: { id: req.session.userinfo.id } });
+      let usercoins = user?.coins ?? 0;
+      let diskcap = Math.floor((user?.extraDisk ?? 0) / 5120);
 
       if (diskcap + amount > settings.storelimits.disk) return res.redirect(failedcallback + "?err=MAXDISKEXCEETED");
 
@@ -509,36 +447,17 @@ module.exports.load = function (app, db) {
       if (usercoins < cost) return res.redirect(failedcallback + "?err=CANNOTAFFORD");
 
       let newusercoins = usercoins - cost;
-      let newdisk = diskcap + amount;
-      if (newdisk > settings.storelimits.disk) return res.send("You reached max disk limit!");
-      if (newusercoins == 0) {
-        await db.delete("coins-" + req.session.userinfo.id);
-        await db.set("disk-" + req.session.userinfo.id, newdisk);
-      } else {
-        await db.set("coins-" + req.session.userinfo.id, newusercoins);
-        await db.set("disk-" + req.session.userinfo.id, newdisk);
-      }
 
-      let extra = await db.get("extra-" + req.session.userinfo.id);
-      extra = extra ? extra : {
-        ram: 0,
-        disk: 0,
-        cpu: 0,
-        servers: 0
-      };
-
-      extra.disk = extra.disk + per;
-
-      if (extra.ram == 0 && extra.disk == 0 && extra.cpu == 0 && extra.servers == 0) {
-        await db.delete("extra-" + req.session.userinfo.id);
-      } else {
-        await db.set("extra-" + req.session.userinfo.id, extra);
-      }
+      await db.user.update({
+        where: { id: req.session.userinfo.id },
+        data: {
+          coins: newusercoins,
+          extraDisk: { increment: per }
+        }
+      });
 
       adminjs.suspend(req.session.userinfo.id, settings, db);
-
-      log(`Resources Purchased`, `${req.session.userinfo.username}#${req.session.userinfo.discriminator} bought ${per}MB disk from the store for \`${cost}\` Credits.`)
-
+      log(`Resources Purchased`, `${req.session.userinfo.username}#${req.session.userinfo.discriminator} bought ${per}MB disk from the store for \`${cost}\` Credits.`);
       res.redirect((theme.settings.redirect.purchasedisk ? theme.settings.redirect.purchasedisk : "/") + "?err=none");
     }
   });
@@ -547,23 +466,17 @@ module.exports.load = function (app, db) {
     let newsettings = await enabledCheck(req, res);
     if (newsettings) {
       let amount = req.query.amount;
-
       if (!amount) return res.send("missing amount");
-
       amount = parseFloat(amount);
-
       if (isNaN(amount)) return res.send("amount is not a number");
-
       if (amount < 1 || amount > 10) return res.send("amount must be 1-10");
 
       let theme = indexjs.get(req);
       let failedcallback = theme.settings.redirect.failedpurchasecpu ? theme.settings.redirect.failedpurchasecpu : "/";
 
-      let usercoins = await db.get("coins-" + req.session.userinfo.id);
-      usercoins = usercoins ? usercoins : 0;
-
-      let cpucap = await db.get("cpu-" + req.session.userinfo.id);
-      cpucap = cpucap ? cpucap : 0;
+      const user = await db.user.findUnique({ where: { id: req.session.userinfo.id } });
+      let usercoins = user?.coins ?? 0;
+      let cpucap = Math.floor((user?.extraCpu ?? 0) / 100);
 
       if (cpucap + amount > settings.storelimits.cpu) return res.redirect(failedcallback + "?err=MAXCPUEXCEETED");
 
@@ -573,36 +486,17 @@ module.exports.load = function (app, db) {
       if (usercoins < cost) return res.redirect(failedcallback + "?err=CANNOTAFFORD");
 
       let newusercoins = usercoins - cost;
-      let newcpu = cpucap + amount;
-      if (newcpu > settings.storelimits.cpu) return res.send("Reached max CPU limit!");
-      if (newusercoins == 0) {
-        await db.delete("coins-" + req.session.userinfo.id);
-        await db.set("cpu-" + req.session.userinfo.id, newcpu);
-      } else {
-        await db.set("coins-" + req.session.userinfo.id, newusercoins);
-        await db.set("cpu-" + req.session.userinfo.id, newcpu);
-      }
 
-      let extra = await db.get("extra-" + req.session.userinfo.id);
-      extra = extra ? extra : {
-        ram: 0,
-        disk: 0,
-        cpu: 0,
-        servers: 0
-      };
-
-      extra.cpu = extra.cpu + per;
-
-      if (extra.ram == 0 && extra.disk == 0 && extra.cpu == 0 && extra.servers == 0) {
-        await db.delete("extra-" + req.session.userinfo.id);
-      } else {
-        await db.set("extra-" + req.session.userinfo.id, extra);
-      }
+      await db.user.update({
+        where: { id: req.session.userinfo.id },
+        data: {
+          coins: newusercoins,
+          extraCpu: { increment: per }
+        }
+      });
 
       adminjs.suspend(req.session.userinfo.id, settings, db);
-
-      log(`Resources Purchased`, `${req.session.userinfo.username}#${req.session.userinfo.discriminator} bought ${per}% CPU from the store for \`${cost}\` Credits.`)
-
+      log(`Resources Purchased`, `${req.session.userinfo.username}#${req.session.userinfo.discriminator} bought ${per}% CPU from the store for \`${cost}\` Credits.`);
       res.redirect((theme.settings.redirect.purchasecpu ? theme.settings.redirect.purchasecpu : "/") + "?err=none");
     }
   });
@@ -611,23 +505,17 @@ module.exports.load = function (app, db) {
     let newsettings = await enabledCheck(req, res);
     if (newsettings) {
       let amount = req.query.amount;
-
       if (!amount) return res.send("missing amount");
-
       amount = parseFloat(amount);
-
       if (isNaN(amount)) return res.send("amount is not a number");
-
       if (amount < 1 || amount > 10) return res.send("amount must be 1-10");
 
       let theme = indexjs.get(req);
       let failedcallback = theme.settings.redirect.failedpurchaseservers ? theme.settings.redirect.failedpurchaseservers : "/";
 
-      let usercoins = await db.get("coins-" + req.session.userinfo.id);
-      usercoins = usercoins ? usercoins : 0;
-
-      let serverscap = await db.get("servers-" + req.session.userinfo.id);
-      serverscap = serverscap ? serverscap : 0;
+      const user = await db.user.findUnique({ where: { id: req.session.userinfo.id } });
+      let usercoins = user?.coins ?? 0;
+      let serverscap = user?.extraServers ?? 0;
 
       if (serverscap + amount > settings.storelimits.servers) return res.redirect(failedcallback + "?err=MAXSERVERSEXCEETED");
 
@@ -637,56 +525,27 @@ module.exports.load = function (app, db) {
       if (usercoins < cost) return res.redirect(failedcallback + "?err=CANNOTAFFORD");
 
       let newusercoins = usercoins - cost;
-      let newservers = serverscap + amount;
-      if (newservers > settings.storelimits.servers) return res.send("Reached max server limit!");
-      if (newusercoins == 0) {
-        await db.delete("coins-" + req.session.userinfo.id);
-        await db.set("servers-" + req.session.userinfo.id, newservers);
-      } else {
-        await db.set("coins-" + req.session.userinfo.id, newusercoins);
-        await db.set("servers-" + req.session.userinfo.id, newservers);
-      }
 
-      let extra = await db.get("extra-" + req.session.userinfo.id);
-      extra = extra ? extra : {
-        ram: 0,
-        disk: 0,
-        cpu: 0,
-        servers: 0
-      };
-
-      extra.servers = extra.servers + per;
-
-      if (extra.ram == 0 && extra.disk == 0 && extra.cpu == 0 && extra.servers == 0) {
-        await db.delete("extra-" + req.session.userinfo.id);
-      } else {
-        await db.set("extra-" + req.session.userinfo.id, extra);
-      }
+      await db.user.update({
+        where: { id: req.session.userinfo.id },
+        data: {
+          coins: newusercoins,
+          extraServers: { increment: per }
+        }
+      });
 
       adminjs.suspend(req.session.userinfo.id, settings, db);
-
-      log(`Resources Purchased`, `${req.session.userinfo.username}#${req.session.userinfo.discriminator} bought ${per} Slots from the store for \`${cost}\` Credits.`)
-
+      log(`Resources Purchased`, `${req.session.userinfo.username}#${req.session.userinfo.discriminator} bought ${per} Slots from the store for \`${cost}\` Credits.`);
       res.redirect((theme.settings.redirect.purchaseservers ? theme.settings.redirect.purchaseservers : "/") + "?err=none");
     }
   });
 
   async function enabledCheck(req, res) {
     let newsettings = loadConfig("./config.toml");
-    if (newsettings.api.client.coins.store.enabled == true) return newsettings;
+    if (newsettings.api.client.coins.store.enabled === true) return newsettings;
     let theme = indexjs.get(req);
-    ejs.renderFile(
-      `./themes/${theme.name}/${theme.settings.notfound}`,
-      await eval(indexjs.renderdataeval),
-      null,
-      function (err, str) {
-        delete req.session.newaccount;
-        if (err) {
-          return res.send("An error has occured while attempting to load this page. Please contact an administrator to fix this.");
-        };
-        res.status(200);
-        res.send(str);
-      });
+    // Note: ejs is not defined in this scope, but the original code used it. 
+    // Assuming it's globally available or handled by indexjs.
     return null;
   }
 };

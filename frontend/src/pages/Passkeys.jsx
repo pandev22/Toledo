@@ -1,4 +1,6 @@
 import React, { useState, useEffect } from 'react';
+import { ConfirmDialog } from '@/components/ConfirmDialog';
+import { useToast } from '@/hooks/use-toast';
 import {
   Fingerprint,
   KeyRound,
@@ -11,11 +13,10 @@ import {
 } from 'lucide-react';
 
 const PasskeysPage = () => {
+  const { toast } = useToast();
   const [passkeys, setPasskeys] = useState([]);
   const [isPasskeyEnabled, setIsPasskeyEnabled] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState(null);
-  const [success, setSuccess] = useState(null);
   const [newPasskeyName, setNewPasskeyName] = useState('');
   const [isRegistering, setIsRegistering] = useState(false);
   const [isDeleting, setIsDeleting] = useState(null);
@@ -39,7 +40,11 @@ const PasskeysPage = () => {
       setIsPasskeyEnabled(data.enabled || false);
     } catch (err) {
       console.error('Error fetching passkey status:', err);
-      setError('Failed to load passkey information');
+      toast({
+        title: 'Error',
+        description: 'Failed to load passkey information',
+        variant: 'destructive',
+      });
     } finally {
       setIsLoading(false);
     }
@@ -85,15 +90,16 @@ const PasskeysPage = () => {
     e.preventDefault();
 
     if (!newPasskeyName.trim()) {
-      setError('Please provide a name for this passkey');
+      toast({
+        title: 'Error',
+        description: 'Please provide a name for this passkey',
+        variant: 'destructive',
+      });
       return;
     }
 
     try {
       setIsRegistering(true);
-      setError(null);
-      setSuccess(null);
-
       // 1. Get registration options from server
       const optionsResponse = await fetch('/api/passkey/registration-options', {
         method: 'POST',
@@ -107,7 +113,6 @@ const PasskeysPage = () => {
       }
 
       const options = await optionsResponse.json();
-
       // 2. Create credential with browser API
       options.user.id = base64urlToBuffer(options.user.id);
       options.challenge = base64urlToBuffer(options.challenge);
@@ -130,7 +135,6 @@ const PasskeysPage = () => {
           throw new Error(`Passkey creation failed: ${credError.message}`);
         }
       }
-
       // 3. Send credential to server for verification
       const attestationResponse = {
         id: credential.id,
@@ -142,26 +146,30 @@ const PasskeysPage = () => {
         type: credential.type,
         transports: credential.response.getTransports ? credential.response.getTransports() : undefined
       };
-
       const verificationResponse = await fetch('/api/passkey/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(attestationResponse)
       });
-
       if (!verificationResponse.ok) {
         const errorData = await verificationResponse.json();
         throw new Error(errorData.error || 'Failed to register passkey');
       }
-
       const verificationData = await verificationResponse.json();
       setPasskeys(verificationData.passkeys);
       setIsPasskeyEnabled(true);
-      setSuccess('Passkey successfully registered');
+      toast({
+        title: 'Success',
+        description: 'Passkey successfully registered',
+      });
       setNewPasskeyName('');
     } catch (err) {
       console.error('Passkey registration error:', err);
-      setError(err.message || 'Failed to register passkey');
+      toast({
+        title: 'Error',
+        description: err.message || 'Failed to register passkey',
+        variant: 'destructive',
+      });
     } finally {
       setIsRegistering(false);
     }
@@ -169,46 +177,33 @@ const PasskeysPage = () => {
 
   // Remove passkey
   const removePasskey = async (passkeyId) => {
-    if (!confirm('Are you sure you want to remove this passkey?')) {
-      return;
-    }
-
     try {
       setIsDeleting(passkeyId);
-      setError(null);
-      setSuccess(null);
-
       const response = await fetch(`/api/passkey/${passkeyId}`, {
         method: 'DELETE'
       });
-
       if (!response.ok) {
         const errorData = await response.json();
         throw new Error(errorData.error || 'Failed to remove passkey');
       }
-
       const data = await response.json();
       setPasskeys(data.passkeys);
       setIsPasskeyEnabled(data.passkeys.length > 0);
-      setSuccess('Passkey successfully removed');
+      toast({
+        title: 'Success',
+        description: 'Passkey successfully removed',
+      });
     } catch (err) {
       console.error('Error removing passkey:', err);
-      setError(err.message || 'Failed to remove passkey');
+      toast({
+        title: 'Error',
+        description: err.message || 'Failed to remove passkey',
+        variant: 'destructive',
+      });
     } finally {
       setIsDeleting(null);
     }
   };
-
-  // Clear notifications after 5 seconds
-  useEffect(() => {
-    if (error || success) {
-      const timer = setTimeout(() => {
-        if (error) setError(null);
-        if (success) setSuccess(null);
-      }, 5000);
-      return () => clearTimeout(timer);
-    }
-  }, [error, success]);
 
   if (isLoading) {
     return (
@@ -229,7 +224,6 @@ const PasskeysPage = () => {
             <p className="text-[#95a1ad]">Use biometrics or security keys to sign in without passwords</p>
           </div>
         </div>
-
         <div className="bg-amber-500/10 border border-amber-500/20 text-amber-500 p-4 rounded-md flex items-start">
           <AlertCircle className="w-5 h-5 mr-3 mt-0.5 flex-shrink-0" />
           <div>
@@ -259,7 +253,6 @@ const PasskeysPage = () => {
           </div>
         </div>
       </div>
-
       {/* Main Content */}
       <div className="space-y-6">
         {/* Your Passkeys Section */}
@@ -284,17 +277,25 @@ const PasskeysPage = () => {
                         </p>
                       </div>
                     </div>
-                    <button
-                      onClick={() => removePasskey(passkey.id)}
-                      disabled={isDeleting === passkey.id}
-                      className="p-1.5 text-red-500 rounded-md hover:bg-red-500/10 transition active:scale-95 disabled:opacity-50 disabled:hover:bg-transparent disabled:active:scale-100"
-                      title="Remove passkey"
-                    >
-                      {isDeleting === passkey.id ?
-                        <RefreshCw className="w-4 h-4 animate-spin" /> :
-                        <Trash2 className="w-4 h-4" />
+                    <ConfirmDialog
+                      title="Remove Passkey"
+                      description="Are you sure you want to remove this passkey? This action cannot be undone."
+                      confirmText="Remove"
+                      variant="destructive"
+                      onConfirm={() => removePasskey(passkey.id)}
+                      trigger={
+                        <button
+                          disabled={isDeleting === passkey.id}
+                          className="p-1.5 text-red-500 rounded-md hover:bg-red-500/10 transition active:scale-95 disabled:opacity-50 disabled:hover:bg-transparent disabled:active:scale-100"
+                          title="Remove passkey"
+                        >
+                          {isDeleting === passkey.id ?
+                            <RefreshCw className="w-4 h-4 animate-spin" /> :
+                            <Trash2 className="w-4 h-4" />
+                          }
+                        </button>
                       }
-                    </button>
+                    />
                   </div>
                 ))}
               </div>
@@ -307,7 +308,6 @@ const PasskeysPage = () => {
             )}
           </div>
         </div>
-
         {/* Register New Passkey Section */}
         <div className="border border-[#2e3337] rounded-lg bg-transparent">
           <div className="p-4 pb-3 border-b border-[#2e3337]">
@@ -329,7 +329,6 @@ const PasskeysPage = () => {
                   className="w-full px-3 py-2 bg-[#394047] border border-white/5 rounded-md text-sm focus:outline-none focus:border-white/5 focus:ring-1 focus:ring-white/20 transition-colors"
                 />
               </div>
-
               <button
                 type="submit"
                 disabled={isRegistering || !newPasskeyName.trim()}
@@ -353,23 +352,9 @@ const PasskeysPage = () => {
             </form>
           </div>
         </div>
-
-        {/* Status Messages */}
-        {(error || success) && (
-          <div className={`rounded-md p-3 flex items-start ${error
-              ? 'border border-red-500/20 bg-red-500/10 text-red-500'
-              : 'border border-green-500/20 bg-green-500/10 text-green-500'
-            }`}>
-            {error
-              ? <AlertCircle className="w-4 h-4 mt-0.5 mr-2 flex-shrink-0" />
-              : <CheckCircle2 className="w-4 h-4 mt-0.5 mr-2 flex-shrink-0" />
-            }
-            <span className="text-sm">{error || success}</span>
-          </div>
-        )}
       </div>
     </div>
   );
-};
+}
 
 export default PasskeysPage;
