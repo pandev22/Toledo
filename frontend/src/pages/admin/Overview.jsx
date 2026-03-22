@@ -54,6 +54,8 @@ import {
 import axios from 'axios';
 import { useSettings } from '../../hooks/useSettings';
 
+const WELCOME_MODAL_STORAGE_KEY = 'heliactyl-next-welcome-hidden';
+
 // Welcome Modal Component
 function WelcomeModal({ isOpen, onClose }) {
   const [dontShowAgain, setDontShowAgain] = useState(false);
@@ -62,7 +64,7 @@ function WelcomeModal({ isOpen, onClose }) {
 
   const handleClose = () => {
     if (dontShowAgain) {
-      localStorage.setItem(`${siteName}WelcomeShown`, 'true');
+      localStorage.setItem(WELCOME_MODAL_STORAGE_KEY, 'true');
     }
     onClose();
   };
@@ -89,7 +91,8 @@ function WelcomeModal({ isOpen, onClose }) {
           </div>
 
           <div className="w-full mt-10 space-y-4">
-            <div
+            <button
+              type="button"
               className="flex items-center space-x-2 group cursor-pointer opacity-60 hover:opacity-100 transition-opacity ml-1"
               onClick={() => setDontShowAgain(!dontShowAgain)}
             >
@@ -100,17 +103,12 @@ function WelcomeModal({ isOpen, onClose }) {
                 className="h-4 w-4 border-neutral-700 rounded-sm transition-all duration-200 group-hover:border-neutral-500 data-[state=checked]:bg-white data-[state=checked]:border-white data-[state=checked]:text-black shrink-0"
                 onClick={(e) => e.stopPropagation()}
               />
-              <label
-                htmlFor="dontShowAgain"
+              <span
                 className="text-[0.7rem] uppercase tracking-widest font-bold text-neutral-400 cursor-pointer select-none whitespace-nowrap"
-                onClick={(e) => {
-                  e.preventDefault();
-                  setDontShowAgain(!dontShowAgain);
-                }}
               >
                 Don't show this again
-              </label>
-            </div>
+              </span>
+            </button>
             <Button
               onClick={handleClose}
               className="group w-full h-12 text-base font-bold transition-all duration-300 active:scale-[0.98] bg-white text-black hover:bg-neutral-100 flex items-center justify-center gap-2 rounded-xl"
@@ -153,8 +151,8 @@ function SystemStats() {
 
 return (
     <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-      {statCards.map((stat, i) => (
-        <Card key={i}>
+      {statCards.map((stat) => (
+        <Card key={stat.label}>
           <CardContent className="pt-6">
             <div className="flex items-center gap-4">
               <div className="p-3 bg-[#202229] rounded-lg">
@@ -407,15 +405,14 @@ function BackupsDialog({ isOpen, onClose }) {
 }
 
 export default function AdminOverview() {
-  const [showWelcome, setShowWelcome] = useState(() => {
-    return !localStorage.getItem('Heliactyl NextWelcomeShown');
-  });
+  const [showWelcome, setShowWelcome] = useState(false);
   const [configContent, setConfigContent] = useState('');
   const [isRebootDialogOpen, setIsRebootDialogOpen] = useState(false);
   const [isBackupsDialogOpen, setIsBackupsDialogOpen] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isRebooting, setIsRebooting] = useState(false);
   const { toast } = useToast();
+  const { settings } = useSettings();
 
   const { data: config, isLoading: loadingConfig } = useQuery({
     queryKey: ['config'],
@@ -435,6 +432,14 @@ export default function AdminOverview() {
   });
 
   useEffect(() => {
+    if (!settings) {
+      return;
+    }
+
+    setShowWelcome(localStorage.getItem(WELCOME_MODAL_STORAGE_KEY) !== 'true');
+  }, [settings]);
+
+  useEffect(() => {
     const fetchConfigContent = async () => {
       try {
         const { data } = await axios.get('/api/config/raw');
@@ -444,7 +449,7 @@ export default function AdminOverview() {
       }
     };
     fetchConfigContent();
-  }, []);
+  }, [toast]);
 
   const handleSaveConfig = async () => {
     try {
