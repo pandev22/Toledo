@@ -13,16 +13,6 @@ import { FAQSection } from '../components/FAQSection';
 import { Card, CardContent } from '@/components/ui/card';
 import { useSettings } from '@/hooks/useSettings';
 
-// Utility function to format bytes
-function formatBytes(bytes, decimals = 2) {
-  if (bytes === 0) return '0 MB';
-  const k = 1024;
-  const dm = decimals < 0 ? 0 : decimals;
-  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
-}
-
 const ResourceCard = React.memo(function ResourceCard({ icon: Icon, title, used, total, unit, isBoosted }) {
   const { percentage, colorClass, formattedUsed, formattedTotal } = useMemo(() => {
     const pct = total ? (used / total) * 100 : 0;

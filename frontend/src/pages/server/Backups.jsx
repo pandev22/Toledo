@@ -9,6 +9,7 @@ import { Trash2, Plus, RefreshCw, Download } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { useToast } from '@/hooks/use-toast';
+import { formatBytes } from '@/lib/format';
 
 const BackupsPage = () => {
   const { id } = useParams();
@@ -87,14 +88,6 @@ const BackupsPage = () => {
     return backup.attributes.is_successful ? 'Completed' : 'Failed';
   };
 
-  const formatBytes = (bytes) => {
-    if (bytes === 0) return 'Pending';
-    const k = 1024;
-    const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-  };
-
   const formatDate = (date) => {
     return new Date(date).toLocaleString();
   };
@@ -151,7 +144,7 @@ const BackupsPage = () => {
                     {backups.map((backup) => (
                       <TableRow key={backup.attributes.uuid}>
                         <TableCell>{backup.attributes.name || 'Backup'}</TableCell>
-                        <TableCell>{formatBytes(backup.attributes.bytes)}</TableCell>
+                        <TableCell>{backup.attributes.bytes === 0 ? 'Pending' : formatBytes(backup.attributes.bytes)}</TableCell>
                         <TableCell>{formatDate(backup.attributes.created_at)}</TableCell>
                         <TableCell>
                           <div className="flex items-center">
