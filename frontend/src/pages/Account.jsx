@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { User, Coins, Eye, EyeOff, Gift, HelpCircle, Copy, Key, RefreshCw, AlertCircle, ShieldCheck } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { User, Coins, Eye, EyeOff, Gift, HelpCircle, Copy, Key, RefreshCw, AlertCircle, ShieldCheck, AlertTriangle, Trash2, Loader2 } from 'lucide-react';
 import TwoFactorAuth from './TwoFactorAuth';
 
 const AccountPage = () => {
+  const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState("account");
   const [claimCode, setClaimCode] = useState('');
   const [newCode, setNewCode] = useState('');
@@ -16,6 +18,12 @@ const AccountPage = () => {
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [passwordMessage, setPasswordMessage] = useState(null);
+  
+  // Account deletion state
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+  const [deleteConfirmation, setDeleteConfirmation] = useState('');
+  const [deleteError, setDeleteError] = useState(null);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   useEffect(() => {
     const fetchData = async () => {
@@ -135,6 +143,50 @@ const AccountPage = () => {
     }
   };
 
+  const handleDeleteAccount = async () => {
+    if (deleteConfirmation !== userData.username) {
+      setDeleteError('Username does not match');
+      return;
+    }
+
+    setIsDeleting(true);
+    setDeleteError(null);
+
+    try {
+      const response = await fetch('/api/user/account', {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+        }
+      });
+
+      const data = await response.json();
+
+      if (!response.ok || data.error) {
+        setDeleteError(data.error);
+      } else {
+        handleDeleteDialogClose(false);
+        navigate('/auth');
+      }
+    } catch (error) {
+      setDeleteError('Failed to delete account. Please try again.');
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  const handleDeleteDialogClose = (open) => {
+    if (!open && isDeleting) {
+      return;
+    }
+
+    setShowDeleteDialog(open);
+    if (!open) {
+      setDeleteConfirmation('');
+      setDeleteError(null);
+    }
+  };
+
   const copyToClipboard = (text) => {
     navigator.clipboard.writeText(text);
     setMessage({ type: 'success', text: 'Copied to clipboard!' });
@@ -195,6 +247,7 @@ const AccountPage = () => {
         <div className="border-b border-[#2e3337] overflow-x-auto">
           <div className="flex space-x-2 w-max pb-px">
             <button
+              type="button"
               onClick={() => setActiveTab('account')}
               className={`flex items-center gap-2 px-4 py-2 border-b-2 font-medium transition whitespace-nowrap ${activeTab === 'account'
                   ? 'border-white text-white'
@@ -204,6 +257,7 @@ const AccountPage = () => {
               Account Settings
             </button>
             <button
+              type="button"
               onClick={() => setActiveTab('security')}
               className={`flex items-center gap-2 px-4 py-2 border-b-2 font-medium transition whitespace-nowrap ${activeTab === 'security'
                   ? 'border-white text-white'
@@ -214,6 +268,7 @@ const AccountPage = () => {
               Security
             </button>
             <button
+              type="button"
               onClick={() => setActiveTab('referrals')}
               className={`flex items-center gap-2 px-4 py-2 border-b-2 font-medium transition whitespace-nowrap ${activeTab === 'referrals'
                   ? 'border-white text-white'
@@ -249,8 +304,9 @@ const AccountPage = () => {
                         readOnly
                         className="flex-1 px-3 py-2 bg-[#394047] border border-white/5 rounded-md text-sm focus:outline-none"
                       />
-                      <button
-                        onClick={() => copyToClipboard('discord_' + userData.id + '@gmail.com')}
+                       <button
+                         type="button"
+                          onClick={() => copyToClipboard('discord_' + userData.id + '@gmail.com')}
                         className="p-2 rounded-md border border-white/5 text-[#95a1ad] hover:text-white hover:bg-white/5 transition active:scale-95"
                       >
                         <Copy className="h-4 w-4" />
@@ -311,6 +367,7 @@ const AccountPage = () => {
                   className="w-full px-3 py-2 bg-[#394047] border border-white/5 rounded-md text-sm focus:outline-none focus:border-white/5 focus:ring-1 focus:ring-white/20 transition-colors"
                 />
                 <button
+                  type="button"
                   onClick={handlePasswordChange}
                   className="px-4 py-2 bg-white text-black hover:bg-white/90 rounded-md font-medium text-sm transition active:scale-95"
                 >
@@ -327,6 +384,32 @@ const AccountPage = () => {
 
             {/* Two-Factor Authentication */}
             <TwoFactorAuth />
+
+            {/* Danger Zone - Account Deletion */}
+            <div className="border border-red-500/20 rounded-lg bg-transparent">
+              <div className="p-4 pb-3 border-b border-red-500/20">
+                <div className="flex items-center gap-2">
+                  <AlertTriangle className="w-5 h-5 text-red-500" />
+                  <h3 className="font-normal text-lg text-red-400">Danger Zone</h3>
+                </div>
+                <p className="text-sm text-[#95a1ad] mt-1">
+                  Permanently delete your account and all associated data
+                </p>
+              </div>
+              <div className="p-4">
+                <p className="text-sm text-[#95a1ad] mb-4">
+                  Once you delete your account, there is no going back. All your servers, data, and coins will be permanently deleted.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setShowDeleteDialog(true)}
+                  className="px-4 py-2 bg-red-600 text-white hover:bg-red-700 rounded-md font-medium text-sm transition active:scale-95 flex items-center gap-2"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  Delete Account
+                </button>
+              </div>
+            </div>
           </div>
         )}
 
@@ -380,6 +463,7 @@ const AccountPage = () => {
                     className="flex-1 px-3 py-2 bg-[#394047] border border-white/5 rounded-md text-sm focus:outline-none focus:border-white/5 focus:ring-1 focus:ring-white/20 transition-colors"
                   />
                   <button
+                    type="button"
                     onClick={handleGenerateCode}
                     disabled={isSubmitting}
                     className={`px-4 py-2 rounded-md font-medium text-sm transition active:scale-95 ${isSubmitting
@@ -411,6 +495,7 @@ const AccountPage = () => {
                     className="flex-1 px-3 py-2 bg-[#394047] border border-white/5 rounded-md text-sm focus:outline-none focus:border-white/5 focus:ring-1 focus:ring-white/20 transition-colors"
                   />
                   <button
+                    type="button"
                     onClick={handleClaimCode}
                     disabled={isSubmitting}
                     className={`px-4 py-2 rounded-md font-medium text-sm transition active:scale-95 ${isSubmitting
@@ -435,6 +520,94 @@ const AccountPage = () => {
             </div>
           </div>
         )}
+      </div>
+
+      {/* Delete Account Confirmation Dialog */}
+      <div className={`fixed inset-0 z-50 flex items-center justify-center ${showDeleteDialog ? 'block' : 'hidden'}`}>
+        <button
+          type="button"
+          className="absolute inset-0 bg-black/60 backdrop-blur-sm cursor-default"
+          onClick={() => handleDeleteDialogClose(false)}
+          aria-label="Close dialog"
+          disabled={isDeleting}
+        />
+        <div className="relative bg-[#1a1d21] border border-[#2e3337] rounded-lg p-6 max-w-md w-full mx-4 shadow-xl">
+          <div className="flex items-center gap-3 mb-4">
+            <div className="p-2 bg-red-500/10 rounded-full">
+              <AlertTriangle className="w-5 h-5 text-red-500" />
+            </div>
+            <h3 className="text-lg font-semibold text-white">Delete Account Permanently</h3>
+          </div>
+          
+          <div className="space-y-4">
+            <p className="text-sm text-[#95a1ad]">
+              This action <span className="font-bold text-white">cannot be undone</span>. This will permanently delete your account and all associated data.
+            </p>
+            
+            <div className="p-3 bg-red-500/10 border border-red-500/20 rounded-md">
+              <p className="text-sm text-red-400 font-medium">What happens when you delete your account:</p>
+              <ul className="list-disc list-inside mt-2 space-y-1 text-sm text-[#95a1ad]">
+                <li>All your servers will be permanently deleted</li>
+                <li>All your coins and data will be lost</li>
+                <li>You will be logged out immediately</li>
+              </ul>
+            </div>
+            
+            <div>
+              <label htmlFor="delete-confirm" className="block text-sm text-[#95a1ad] mb-2">
+                Type <span className="font-bold text-white">{userData?.username}</span> to confirm:
+              </label>
+              <input
+                id="delete-confirm"
+                type="text"
+                value={deleteConfirmation}
+                onChange={(e) => {
+                  setDeleteConfirmation(e.target.value);
+                  setDeleteError(null);
+                }}
+                placeholder={userData?.username}
+                className="w-full px-3 py-2 bg-[#394047] border border-white/5 rounded-md text-sm focus:outline-none focus:border-white/5 focus:ring-1 focus:ring-white/20 transition-colors text-white"
+                disabled={isDeleting}
+              />
+            </div>
+            
+            {deleteError && (
+              <div className="flex items-center gap-2 text-red-500 text-sm">
+                <AlertCircle className="w-4 h-4" />
+                {deleteError}
+              </div>
+            )}
+          </div>
+          
+          <div className="flex justify-end gap-3 mt-6">
+            <button
+              type="button"
+              onClick={() => handleDeleteDialogClose(false)}
+              disabled={isDeleting}
+              className="px-4 py-2 border border-[#2e3337] text-white rounded-md font-medium text-sm hover:bg-white/5 transition disabled:opacity-50"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={handleDeleteAccount}
+              disabled={deleteConfirmation !== userData?.username || isDeleting}
+              className="px-4 py-2 bg-red-600 text-white rounded-md font-medium text-sm hover:bg-red-700 transition active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+            >
+              {isDeleting ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Deleting...
+                </>
+              ) : (
+                <>
+                  <Trash2 className="w-4 h-4" />
+                  Delete Account
+                </>
+              )}
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   );

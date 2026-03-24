@@ -4,6 +4,7 @@ const settings = loadConfig("./config.toml");
 const WebSocket = require('ws');
 const axios = require('axios');
 const { validate, schemas } = require('../../handlers/validate');
+const { isAuthenticated, ownsServer } = require('./core');
 
 /* Ensure platform release target is met */
 const HeliactylModule = {
@@ -30,28 +31,6 @@ const HeliactylModule = {
 module.exports.HeliactylModule = HeliactylModule;
 module.exports.load = async function (app, db) {
     const router = express.Router();
-
-    // Middleware to check if user is authenticated
-    const isAuthenticated = (req, res, next) => {
-        if (req.session.pterodactyl) {
-            next();
-        } else {
-            res.status(401).json({ error: "Unauthorized" });
-        }
-    };
-
-    // Middleware to check if user owns the server
-    const ownsServer = (req, res, next) => {
-        const serverId = req.params.id;
-        const userServers = req.session.pterodactyl.relationships.servers.data;
-        const serverOwned = userServers.some(server => server.attributes.identifier === serverId);
-
-        if (serverOwned) {
-            next();
-        } else {
-            res.status(403).json({ error: "Forbidden. You don't have access to this server." });
-        }
-    };
 
     // POST Reinstall server
     router.post('/server/:id/reinstall', isAuthenticated, ownsServer, async (req, res) => {

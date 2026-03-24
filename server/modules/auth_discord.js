@@ -212,12 +212,14 @@ module.exports.load = async function (app, db) {
     };
 
     if (!code) {
-      return redirectAuthError('discord_auth_failed');
+      return redirectAuthError('discord_missing_code');
     }
 
     if (state !== req.session.oauthState) {
-      return redirectAuthError('discord_auth_failed');
+      return redirectAuthError('discord_session_expired');
     }
+
+    delete req.session.oauthState;
 
     // Get client IP
     const clientIp = req.headers['x-forwarded-for']?.split(',')[0] || req.socket.remoteAddress?.replace('::ffff:', '');
@@ -258,10 +260,25 @@ module.exports.load = async function (app, db) {
 
       const userData = userResponse.data;
 
+      if (!userData.email) {
+        return redirectAuthError('discord_email_unavailable');
+      }
+
       // Get or create user record
       let user = await db.user.findUnique({ where: { discordId: userData.id } });
       let pteroId = user?.pterodactylId;
       let isNewUser = !user;
+
+      if (isNewUser) {
+        const existingEmailUser = await db.user.findUnique({
+          where: { email: userData.email },
+          select: { id: true }
+        });
+
+        if (existingEmailUser) {
+          return redirectAuthError('discord_email_in_use');
+        }
+      }
 
       // Verify existing Pterodactyl account or create new one
       if (!pteroId || !(await verifyPterodactylAccount(pteroId))) {
@@ -335,6 +352,15 @@ module.exports.load = async function (app, db) {
       res.redirect('/dashboard');
     } catch (error) {
       console.error('Discord authentication failed:', error);
+
+      if (error?.code === 'P2002') {
+        return redirectAuthError('discord_email_in_use');
+      }
+
+      if (error.response?.status === 400 || error.response?.status === 401) {
+        return redirectAuthError('discord_oauth_error');
+      }
+
       return redirectAuthError('discord_auth_failed');
     }
   });

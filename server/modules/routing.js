@@ -36,21 +36,23 @@ module.exports.load = async function (app, db) {
 
   const renderHtml = (html) => html.replace(/{{SITE_NAME}}/g, settings.website.name || 'Heliactyl');
 
-  async function refreshHtmlCache() {
+  async function refreshHtmlCache(reason = 'manual') {
     try {
       const html = await fs.readFile(indexPath, 'utf8');
       cachedHtml = renderHtml(html);
       isUsingDistBuild = true;
+      console.log(`[ROUTING] Frontend HTML cache reloaded (${reason}) using dist build.`);
       return cachedHtml;
     } catch (distError) {
       const html = await fs.readFile(devIndexPath, 'utf8');
       cachedHtml = renderHtml(html);
       isUsingDistBuild = false;
+      console.log(`[ROUTING] Frontend HTML cache reloaded (${reason}) using dev source.`);
       return cachedHtml;
     }
   }
 
-  await refreshHtmlCache().catch(() => null);
+  await refreshHtmlCache('startup').catch(() => null);
 
   const watcher = chokidar.watch([indexPath, devIndexPath], {
     ignoreInitial: true,
@@ -60,9 +62,9 @@ module.exports.load = async function (app, db) {
     }
   });
 
-  watcher.on('add', () => refreshHtmlCache().catch(() => null));
-  watcher.on('change', () => refreshHtmlCache().catch(() => null));
-  watcher.on('unlink', () => refreshHtmlCache().catch(() => null));
+  watcher.on('add', () => refreshHtmlCache('file added').catch(() => null));
+  watcher.on('change', () => refreshHtmlCache('file changed').catch(() => null));
+  watcher.on('unlink', () => refreshHtmlCache('file removed').catch(() => null));
 
   app.use('/', express.static(distPath, {
     fallthrough: true,
@@ -78,7 +80,7 @@ module.exports.load = async function (app, db) {
     if (req.path.startsWith('/api/')) return next();
 
     try {
-      const html = cachedHtml || await refreshHtmlCache();
+      const html = cachedHtml || await refreshHtmlCache('request fallback');
 
       res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
       res.setHeader('X-Frontend-Source', isUsingDistBuild ? 'dist' : 'dev');

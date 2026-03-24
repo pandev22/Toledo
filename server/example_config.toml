@@ -92,18 +92,6 @@ cpu = 100
 servers = 2
 
 # ---------------------------------
-# Location Configuration
-# --------------------------------
-[api.client.locations.1]
-name = "France, Paris"
-
-[api.client.locations.2]
-name = "United States, New York"
-
-[api.client.locations.3]
-name = "Singapore, Singapore"
-
-# ---------------------------------
 # Egg Configuration
 # ---------------------------------
 

@@ -11,6 +11,9 @@ const { initializeServerRenewal, removeServerRenewal } = require('./renewals.js'
 
 // Dynamic eggs helper - will be initialized in load()
 let getEggsFromDB = null;
+let getLocationsFromDB = null;
+let getNodesFromDB = null;
+let syncLocationsAndNodes = null;
 
 // Ensure Pterodactyl domain is properly formatted
 if (settings.pterodactyl?.domain?.slice(-1) === '/') {
@@ -122,6 +125,15 @@ module.exports.load = async function (app, db) {
         console.log('[EGGS] Dynamic eggs module not loaded');
     }
 
+    try {
+        const locationsNodesModule = require('../locations-nodes.js');
+        getLocationsFromDB = locationsNodesModule.getLocationsFromDB;
+        getNodesFromDB = locationsNodesModule.getNodesFromDB;
+        syncLocationsAndNodes = locationsNodesModule.syncLocationsAndNodes;
+    } catch (e) {
+        console.log('[LOCATIONS_NODES] Dynamic locations/nodes module not loaded');
+    }
+
     // Middleware to check authentication
     router.use((req, res, next) => {
         if (!req.session.pterodactyl) {
@@ -191,28 +203,52 @@ module.exports.load = async function (app, db) {
     // GET /api/locations - List all available locations
     router.get('/locations', async (req, res) => {
         try {
-            // Get package name for restriction checking (with cache)
             const userRecord = await db.user.findUnique({ where: { id: req.session.userinfo.id }, select: { packageName: true } });
             const packageName = userRecord?.packageName;
-            const userPackage = settings.api.client.packages.list[packageName || settings.api.client.packages.default];
+            const activePackage = packageName || settings.api.client.packages.default;
 
-            // Filter and format locations
-            const locations = Object.entries(settings.api.client.locations).map(([id, location]) => {
-                // Check if location is restricted to specific packages
-                if (location.package && !location.package.includes(packageName || settings.api.client.packages.default)) {
-                    return null;
+            if (!getLocationsFromDB || !getNodesFromDB) {
+                return res.json([]);
+            }
+
+            let [locations, nodes] = await Promise.all([
+                getLocationsFromDB(db),
+                getNodesFromDB(db)
+            ]);
+
+            if (locations.length === 0 && syncLocationsAndNodes) {
+                await syncLocationsAndNodes(db);
+                [locations, nodes] = await Promise.all([
+                    getLocationsFromDB(db),
+                    getNodesFromDB(db)
+                ]);
+            }
+
+            const enabledNodeLocationIds = new Set(
+                nodes
+                    .filter((node) => node.enabled)
+                    .map((node) => node.locationId?.toString())
+            );
+
+            const filteredLocations = locations.filter((location) => {
+                if (!location.enabled) {
+                    return false;
                 }
 
-                return {
-                    id,
-                    name: location.name || id,
-                    description: location.description,
-                    full: location.full || false,
-                    flags: location.flags || []
-                };
-            }).filter(Boolean);
+                if (Array.isArray(location.packages) && location.packages.length > 0) {
+                    return location.packages.includes(activePackage) && enabledNodeLocationIds.has(location.id.toString());
+                }
 
-            res.json(locations);
+                return enabledNodeLocationIds.has(location.id.toString());
+            }).map((location) => ({
+                id: location.id,
+                name: location.name || location.id,
+                description: location.description,
+                full: location.full || false,
+                flags: location.flags || []
+            }));
+
+            res.json(filteredLocations);
         } catch (error) {
             console.error('Error fetching locations:', error);
             res.status(500).json({ error: 'Failed to fetch locations' });
@@ -222,16 +258,29 @@ module.exports.load = async function (app, db) {
     // GET /api/v5/nodes - List all available nodes
     router.get('/nodes', async (req, res) => {
         try {
-            const response = await pteroApi.get('/api/application/nodes?per_page=10000');
-            const nodes = response.data.data.map(node => ({
-                id: node.attributes.id,
-                name: node.attributes.name,
-                locationId: node.attributes.location_id,
-                fqdn: node.attributes.fqdn,
-                memory: node.attributes.memory,
-                disk: node.attributes.disk,
-                allocated_resources: node.attributes.allocated_resources
-            }));
+            if (!getNodesFromDB) {
+                return res.json([]);
+            }
+
+            let nodes = await getNodesFromDB(db);
+
+            if (nodes.length === 0 && syncLocationsAndNodes) {
+                await syncLocationsAndNodes(db);
+                nodes = await getNodesFromDB(db);
+            }
+
+            nodes = nodes
+                .filter((node) => node.enabled)
+                .map((node) => ({
+                    id: node.id,
+                    name: node.name,
+                    locationId: node.locationId,
+                    fqdn: node.fqdn,
+                    memory: node.memory,
+                    disk: node.disk,
+                    allocated_resources: node.allocated_resources
+                }));
+
             res.json(nodes);
         } catch (error) {
             console.error('Error fetching nodes:', error);
@@ -425,6 +474,35 @@ module.exports.load = async function (app, db) {
 
             if (!eggInfo) {
                 return res.status(400).json({ error: 'Invalid egg specified' });
+            }
+
+            if (getLocationsFromDB && getNodesFromDB) {
+                let [locations, nodes] = await Promise.all([
+                    getLocationsFromDB(db),
+                    getNodesFromDB(db)
+                ]);
+
+                if (locations.length === 0 && syncLocationsAndNodes) {
+                    await syncLocationsAndNodes(db);
+                    [locations, nodes] = await Promise.all([
+                        getLocationsFromDB(db),
+                        getNodesFromDB(db)
+                    ]);
+                }
+
+                const selectedLocation = locations.find((entry) => entry.id.toString() === location.toString());
+                const hasEnabledNodes = nodes.some((entry) => entry.enabled && entry.locationId.toString() === location.toString());
+
+                if (!selectedLocation || !selectedLocation.enabled || !hasEnabledNodes) {
+                    return res.status(400).json({ error: 'This location is not available' });
+                }
+
+                if (Array.isArray(selectedLocation.packages) && selectedLocation.packages.length > 0) {
+                    const activePackage = packageName || settings.api.client.packages.default;
+                    if (!selectedLocation.packages.includes(activePackage)) {
+                        return res.status(400).json({ error: 'This location is not available for your package' });
+                    }
+                }
             }
 
             // Validate against egg minimums

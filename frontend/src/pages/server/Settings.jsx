@@ -169,7 +169,8 @@ const SettingsPage = () => {
     );
   }
 
-  const server = serverData?.attributes;
+  const server = serverData?.attributes ?? null;
+  const currentServerName = server?.name || '';
   const variables = startupData?.data || [];
   const dockerImages = startupData?.meta?.docker_images || {};
 
@@ -197,7 +198,7 @@ const SettingsPage = () => {
 
   const handleRename = async (e) => {
     e.preventDefault();
-    if (serverName.trim() && serverName !== server.name) {
+    if (serverName.trim() && serverName !== currentServerName) {
       renameServer.mutate(serverName);
     }
   };
@@ -260,7 +261,7 @@ const SettingsPage = () => {
                     />
                     <Button
                       type="submit"
-                      disabled={!serverName.trim() || serverName === server.name || renameServer.isPending}
+                      disabled={!serverName.trim() || serverName === currentServerName || renameServer.isPending}
                     >
                       {renameServer.isPending ? (
                         <Loader2 className="w-4 h-4 mr-2 animate-spin" />

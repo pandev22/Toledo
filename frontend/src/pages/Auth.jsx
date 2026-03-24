@@ -109,6 +109,21 @@ const AuthPage = () => {
     if (error === 'vpn') {
       setErrorMessage('VPN detected! Please disable your VPN or proxy to continue.');
       showToast('VPN Detected', 'Please disable your VPN or proxy to continue.');
+    } else if (error === 'discord_session_expired') {
+      setErrorMessage('Discord login expired before it could finish. Please try again from a fresh login window.');
+      showToast('Session Expired', 'Discord login expired before it could finish. Please try again.');
+    } else if (error === 'discord_email_in_use') {
+      setErrorMessage('This Discord email is already linked to another dashboard account. Contact support so the accounts can be merged or updated safely.');
+      showToast('Email Already In Use', 'This Discord email is already linked to another account on this dashboard.');
+    } else if (error === 'discord_email_unavailable') {
+      setErrorMessage('Discord did not provide an email address for this account. Please verify the email on Discord and try again.');
+      showToast('Discord Email Missing', 'Discord did not provide an email address for this account.');
+    } else if (error === 'discord_oauth_error') {
+      setErrorMessage('Discord rejected the authentication request. Please try again in a moment.');
+      showToast('Discord Error', 'Discord rejected the authentication request. Please try again.');
+    } else if (error === 'discord_missing_code') {
+      setErrorMessage('Discord did not return a valid login code. Please start the login again.');
+      showToast('Discord Login Failed', 'Discord did not return a valid login code.');
     } else if (error === 'discord' || error === 'discord_auth_failed') {
       setErrorMessage(
         'Discord authentication failed. If email/password sign-in is unavailable on this instance, please contact support.'

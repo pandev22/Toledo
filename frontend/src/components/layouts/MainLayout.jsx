@@ -11,10 +11,17 @@ import {
   EllipsisHorizontalIcon, CircleStackIcon,
   ListBulletIcon, ArrowLeftIcon, ArrowTrendingUpIcon, GiftIcon,
   FingerPrintIcon, HomeIcon, BoltIcon, PaperAirplaneIcon, ArrowDownLeftIcon,
-  ChevronDownIcon, EllipsisVerticalIcon, LinkIcon,
+  ChevronDownIcon, EllipsisVerticalIcon,
   ShieldCheckIcon, TicketIcon, SignalIcon, ServerIcon
 } from '@heroicons/react/24/outline';
 import { Sheet, SheetContent } from '@/components/ui/sheet';
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+} from '@/components/ui/dropdown-menu';
 
 // Sidebar context for visibility management
 const SidebarContext = createContext({
@@ -87,13 +94,9 @@ const MainLayout = () => {
   const [subuserServers, setSubuserServers] = useState([]);
   const [selectedServerId, setSelectedServerId] = useState(null);
 const [userDropdownOpen, setUserDropdownOpen] = useState(false);
-  const [menuDropdownOpen, setMenuDropdownOpen] = useState(false);
   const [serverName, setServerName] = useState("");
   const [isAdmin, setIsAdmin] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-
-  const userDropdownRef = useRef(null);
-  const menuDropdownRef = useRef(null);
 
   const navigate = useNavigate();
   const location = useLocation();
@@ -172,21 +175,6 @@ const [userDropdownOpen, setUserDropdownOpen] = useState(false);
     }
   }, [id, showServerSection, servers, subuserServers]);
 
-  // Close dropdowns when clicking outside
-  useEffect(() => {
-    function handleClickOutside(event) {
-      if (userDropdownRef.current && !userDropdownRef.current.contains(event.target)) {
-        setUserDropdownOpen(false);
-      }
-      if (menuDropdownRef.current && !menuDropdownRef.current.contains(event.target)) {
-        setMenuDropdownOpen(false);
-      }
-    }
-
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, []);
-
   // Navigation items for both Heliactyl sections
   const iconNavItems = [
     { icon: HomeIcon, label: 'Dashboard', path: '/' },
@@ -215,16 +203,11 @@ const [userDropdownOpen, setUserDropdownOpen] = useState(false);
     { icon: WindowIcon, label: 'Overview', path: '/admin/overview' },
     { icon: ServerIcon, label: 'Servers', path: '/admin/servers' },
     { icon: UsersIcon, label: 'Users', path: '/admin/users' },
-    { icon: ServerStackIcon, label: 'Nodes', path: '/admin/nodes' },
+    { icon: ServerStackIcon, label: 'Locations & Nodes', path: '/admin/nodes' },
     { icon: CubeIcon, label: 'Eggs', path: '/admin/eggs' },
     { icon: TicketIcon, label: 'Tickets', path: '/admin/tickets' },
     { icon: SignalIcon, label: 'Radar', path: '/admin/radar' },
     { icon: CloudArrowDownIcon, label: 'Updater', path: '/admin/updater' }
-  ];
-
-  const menuItems = [
-    { icon: <LinkIcon className="w-4 h-4" />, label: 'Panel', path: settings?.pterodactyl || 'https://panel.heliactyl.toledo', external: true },
-    { icon: <ArrowRightOnRectangleIcon className="w-4 h-4" />, label: 'Logout', action: handleLogout, className: 'text-red-400 hover:text-red-300 hover:bg-red-950/30' }
   ];
 
   // Initial data loading - single consolidated call
@@ -279,7 +262,7 @@ const [userDropdownOpen, setUserDropdownOpen] = useState(false);
         {/* Main container - Full width with no artificial centering */}
         <div className="w-full flex relative z-10">
           {/* Sidebar */}
-          <aside className={`hidden lg:block sticky top-0 h-screen w-56 p-4 border-r border-white/5 bg-[#08090c] flex-shrink-0 relative overflow-hidden transform transition-transform duration-300 ease-in-out ${useSidebar().sidebarVisible ? 'translate-x-0' : '-translate-x-full'
+          <aside className={`hidden lg:block sticky top-0 h-screen w-56 p-4 border-r border-white/5 bg-[#08090c] flex-shrink-0 relative transform transition-transform duration-300 ease-in-out ${useSidebar().sidebarVisible ? 'translate-x-0' : '-translate-x-full'
             }`}>
             {/* Sidebar content */}
             <div className="flex flex-col h-full relative z-10">
@@ -294,6 +277,7 @@ const [userDropdownOpen, setUserDropdownOpen] = useState(false);
               {showServerSection && (
                 <div className="py-2 px-4">
                   <button
+                    type="button"
                     onClick={() => navigate('/dashboard')}
                     className="flex text-white/70 hover:text-white transition duration-200 text-sm active:scale-95 items-center"
                   >
@@ -425,70 +409,47 @@ const [userDropdownOpen, setUserDropdownOpen] = useState(false);
                       {getInitials(userData.global_name)}
                     </span>
                   </div>
-                  <div className="flex flex-col relative" ref={userDropdownRef}>
-                    <button
-                      className="flex items-center gap-1 text-sm font-medium hover:text-white transition-all duration-200 active:scale-95"
-                      onClick={() => setUserDropdownOpen(!userDropdownOpen)}
-                    >
-                      <span className="truncate max-w-[120px]">{userData.global_name}</span>
-                    </button>
-                    <span className="text-[0.55rem] uppercase max-w-[120px] truncate tracking-widest text-white/30 leading-none mt-0.3">
-                      {userData.email}
-                    </span>
-
-                    <AnimatePresence>
-                      {userDropdownOpen && (
-                        <motion.div
-                          initial={{ opacity: 0, y: -10 }}
-                          animate={{ opacity: 1, y: 0 }}
-                          exit={{ opacity: 0, y: -10 }}
-                          transition={{ duration: 0.2 }}
-                          className="absolute bottom-full mb-2 w-64 bg-[#202229] border border-white/5 rounded-xl shadow-lg z-20"
-                        >
-                          <div className="p-3 border-b border-white/5">
-                            <p className="text-sm font-medium">{userData.username}</p>
-                            <p className="text-xs text-[#95a1ad] mt-1">{userData.email}</p>
-                          </div>
-                          <div className="py-1">
-                            <button
-                              className="flex items-center w-full px-3 py-2.5 text-sm text-left hover:bg-white/5 transition-all duration-200 active:scale-95"
-                              onClick={() => {
-                                navigate('/account');
-                                setUserDropdownOpen(false);
-                              }}
-                            >
-                              <UserIcon className="w-4 h-4 mr-2" />
-                              <span className="font-medium">My account</span>
-                            </button>
-                          </div>
-                          <div className="py-1">
-                            <button
-                              className="flex items-center w-full px-3 py-2.5 text-sm text-left hover:bg-white/5 transition-all duration-200 active:scale-95"
-                              onClick={() => {
-                                navigate('/passkeys');
-                                setUserDropdownOpen(false);
-                              }}
-                            >
-                              <FingerPrintIcon className="w-4 h-4 mr-2" />
-                              <span className="font-medium">Passkeys</span>
-                            </button>
-                          </div>
-                          <div className="py-1 border-t border-white/5">
-                            <button
-                              className="flex items-center w-full px-3 py-2.5 text-sm text-left text-red-400 hover:bg-red-950/30 hover:text-red-300 transition-all duration-200 active:scale-95"
-                              onClick={() => {
-                                handleLogout();
-                                setUserDropdownOpen(false);
-                              }}
-                            >
-                              <ArrowRightOnRectangleIcon className="w-4 h-4 mr-2" />
-                              <span className="font-medium">Sign out</span>
-                            </button>
-                          </div>
-                        </motion.div>
-                      )}
-                    </AnimatePresence>
-                  </div>
+                  <DropdownMenu open={userDropdownOpen} onOpenChange={setUserDropdownOpen}>
+                    <DropdownMenuTrigger asChild>
+                      <button
+                        type="button"
+                        className="flex flex-col items-start cursor-pointer hover:text-white transition-all duration-200 active:scale-95 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-white/20 focus-visible:ring-offset-1 focus-visible:ring-offset-[#08090c] rounded-md"
+                      >
+                        <span className="truncate max-w-[120px] text-sm font-medium">{userData.global_name}</span>
+                        <span className="text-[0.55rem] uppercase max-w-[120px] truncate tracking-widest text-white/30 leading-none mt-0.3">
+                          {userData.email}
+                        </span>
+                      </button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent side="top" align="start" sideOffset={8} className="w-64 bg-[#202229] border border-white/5 rounded-xl shadow-lg text-white">
+                      <div className="p-3 border-b border-white/5">
+                        <p className="text-sm font-medium">{userData.username}</p>
+                        <p className="text-xs text-[#95a1ad] mt-1">{userData.email}</p>
+                      </div>
+                      <DropdownMenuItem
+                        className="flex items-center gap-2 px-3 py-2.5 text-sm cursor-pointer text-white hover:bg-white/5 transition-all duration-200 focus:bg-white/5"
+                        onSelect={() => navigate('/account')}
+                      >
+                        <UserIcon className="w-4 h-4" />
+                        <span className="font-medium">My account</span>
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        className="flex items-center gap-2 px-3 py-2.5 text-sm cursor-pointer text-white hover:bg-white/5 transition-all duration-200 focus:bg-white/5"
+                        onSelect={() => navigate('/passkeys')}
+                      >
+                        <FingerPrintIcon className="w-4 h-4" />
+                        <span className="font-medium">Passkeys</span>
+                      </DropdownMenuItem>
+                      <DropdownMenuSeparator className="-mx-1 my-1 h-px bg-white/5" />
+                      <DropdownMenuItem
+                        className="flex items-center gap-2 px-3 py-2.5 text-sm text-red-400 hover:bg-red-950/30 hover:text-red-300 transition-all duration-200 focus:bg-red-950/30 focus:text-red-300 cursor-pointer"
+                        onSelect={handleLogout}
+                      >
+                        <ArrowRightOnRectangleIcon className="w-4 h-4" />
+                        <span className="font-medium">Sign out</span>
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
                 </div>
 
                 {/* Powered by text - Bottom of sidebar */}
@@ -507,6 +468,7 @@ const [userDropdownOpen, setUserDropdownOpen] = useState(false);
           {/* Mobile Header */}
           <header className="lg:hidden fixed top-0 left-0 right-0 h-12 bg-[#08090c] border-b border-white/5 flex items-center justify-between px-2 z-30">
             <button 
+              type="button"
               onClick={() => setMobileMenuOpen(true)} 
               className="p-1.5 hover:bg-white/5 rounded-md transition-colors"
             >
@@ -535,6 +497,7 @@ const [userDropdownOpen, setUserDropdownOpen] = useState(false);
                 {showServerSection && (
                   <div className="py-2 px-4 border-b border-white/5">
                     <button
+                      type="button"
                       onClick={() => {
                         navigate('/dashboard');
                         setMobileMenuOpen(false);
@@ -666,6 +629,7 @@ const [userDropdownOpen, setUserDropdownOpen] = useState(false);
                   {/* Quick Actions */}
                   <div className="space-y-1">
                     <button
+                      type="button"
                       onClick={() => {
                         navigate('/account');
                         setMobileMenuOpen(false);
@@ -676,6 +640,19 @@ const [userDropdownOpen, setUserDropdownOpen] = useState(false);
                       My account
                     </button>
                     <button
+                      type="button"
+                      onClick={() => {
+                        navigate('/passkeys');
+                        setMobileMenuOpen(false);
+                      }}
+                      className="flex items-center text-white w-full px-3 py-2.5 text-sm text-left hover:bg-white/5 rounded-md transition-colors"
+                    >
+                      <FingerPrintIcon className="w-4 h-4 mr-3" />
+                      Passkeys
+                    </button>
+                    <div className="border-t border-white/5 my-1" />
+                    <button
+                      type="button"
                       onClick={() => {
                         handleLogout();
                         setMobileMenuOpen(false);

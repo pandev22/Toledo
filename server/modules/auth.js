@@ -3,6 +3,10 @@ const bcrypt = require('bcrypt');
 const loadConfig = require("../handlers/config.js");
 const settings = loadConfig("./config.toml");
 const axios = require("axios");
+const getPteroUser = require('../handlers/getPteroUser');
+const cache = require('../handlers/cache');
+const log = require('../handlers/log');
+const { removeServerRenewal } = require('./server/renewals');
 const { validate, schemas } = require('../handlers/validate');
 const {
   loginRateLimit,
@@ -14,6 +18,15 @@ const {
 } = require('../handlers/rateLimit');
 
 const RESEND_API_KEY = settings.api.client.resend.api_key;
+
+const pteroApi = axios.create({
+  baseURL: settings.pterodactyl.domain,
+  headers: {
+    'Content-Type': 'application/json',
+    'Accept': 'application/json',
+    'Authorization': `Bearer ${settings.pterodactyl.key}`
+  }
+});
 
 const HeliactylModule = {
   "name": "Authentication",
@@ -79,6 +92,42 @@ async function createPterodactylAccount(username, email) {
     console.error('Full error:', error.response || error);
     throw error;
   }
+}
+
+async function deleteOwnedServers(userId, username, db, servers) {
+  const results = await Promise.all(
+    servers.map(async (server) => {
+      const serverId = server.attributes.id;
+      const serverName = server.attributes.name || server.attributes.identifier || `#${serverId}`;
+
+      try {
+        await pteroApi.delete(`/api/application/servers/${serverId}/force`);
+        await removeServerRenewal(db, {
+          identifier: server.attributes.identifier,
+          panelId: serverId
+        });
+
+        log('server_deleted', `User ${username} deleted server "${serverName}" during account deletion`);
+
+        return {
+          success: true,
+          name: serverName
+        };
+      } catch (error) {
+        console.error(`Failed to delete server ${serverId} during account deletion:`, error.response?.data || error.message || error);
+
+        return {
+          success: false,
+          name: serverName
+        };
+      }
+    })
+  );
+
+  return {
+    deletedServers: results.filter((result) => result.success).map((result) => result.name),
+    failedServers: results.filter((result) => !result.success).map((result) => result.name)
+  };
 }
 
 module.exports.HeliactylModule = HeliactylModule;
@@ -524,6 +573,92 @@ module.exports.load = async function (app, db) {
       }
       res.json({ message: "Logged out successfully" });
     });
+  });
+
+  app.delete("/api/user/account", async (req, res) => {
+    if (!req.session.userinfo) {
+      return res.status(401).json({ error: "Not authenticated" });
+    }
+
+    const sessionUser = req.session.userinfo;
+
+    try {
+      const user = await db.user.findUnique({
+        where: { id: sessionUser.id },
+        select: {
+          id: true,
+          username: true,
+          email: true,
+          pterodactylId: true
+        }
+      });
+
+      if (!user) {
+        return res.status(404).json({ error: "User not found" });
+      }
+
+      let servers = [];
+
+      if (user.pterodactylId) {
+        try {
+          const pteroUser = await getPteroUser(user.id, db);
+          servers = pteroUser?.attributes?.relationships?.servers?.data || [];
+        } catch (error) {
+          if (error.message !== "Pterodactyl account not found!") {
+            console.error('Failed to fetch Pterodactyl account during account deletion:', error);
+            return res.status(502).json({ error: "Failed to fetch Pterodactyl account information" });
+          }
+        }
+      }
+
+      const suspendedServers = servers.filter((server) => server.attributes?.suspended === true);
+      if (suspendedServers.length > 0) {
+        return res.status(403).json({
+          error: "Cannot delete account with suspended servers. Please contact support.",
+          servers: suspendedServers.map((server) => server.attributes.name || server.attributes.identifier)
+        });
+      }
+
+      const { deletedServers, failedServers } = await deleteOwnedServers(user.id, user.username, db, servers);
+      if (failedServers.length > 0) {
+        return res.status(502).json({
+          error: "Failed to delete one or more servers. Please try again or contact support.",
+          servers: failedServers
+        });
+      }
+
+      if (user.pterodactylId) {
+        try {
+          await pteroApi.delete(`/api/application/users/${user.pterodactylId}`);
+        } catch (error) {
+          if (error.response?.status !== 404) {
+            console.error('Failed to delete Pterodactyl user during account deletion:', error.response?.data || error);
+            return res.status(502).json({ error: "Failed to delete the linked Pterodactyl account" });
+          }
+        }
+      }
+
+      log(
+        'user:account_deleted',
+        `User ${user.username} (${user.email}) deleted their account. Deleted ${deletedServers.length} server(s).`
+      );
+
+      await db.user.delete({ where: { id: user.id } });
+      await cache.del(`ptero:user:${user.id}:servers`);
+      await cache.delPattern(`ptero:user:${user.id}:*`);
+
+      req.session.destroy((sessionError) => {
+        if (sessionError) {
+          console.error('Session destruction error after account deletion:', sessionError);
+        }
+
+        res.clearCookie('connect.sid');
+        res.json({ message: "Account deleted successfully" });
+      });
+    } catch (error) {
+      console.error('Account deletion error:', error);
+      res.status(500).json({ error: "Failed to delete account" });
+    }
   });
 
   const authTokenCleanup = setInterval(async () => {
