@@ -4,6 +4,8 @@ const loadConfig = require('../handlers/config');
 const settings = loadConfig('./config.toml');
 const log = require('../handlers/log');
 const { validate, schemas } = require('../handlers/validate');
+const createAuthz = require('../handlers/authz');
+const { financialRateLimit } = require('../handlers/rateLimit');
 
 const HeliactylModule = {
   "name": "Billing",
@@ -258,19 +260,15 @@ module.exports.HeliactylModule = HeliactylModule;
 module.exports.load = async function (app, db) {
   const router = express.Router();
   const billingManager = new BillingManager(db);
+  const authz = createAuthz(db);
 
   // Middleware to check authentication
-  router.use((req, res, next) => {
-    if (!req.session.userinfo) {
-      return res.status(401).json({ error: 'Unauthorized' });
-    }
-    next();
-  });
+  router.use(authz.requireSession);
 
   // Get user's balances and purchase options
   router.get('/billing/info', async (req, res) => {
     try {
-      const userId = req.session.userinfo.id;
+      const userId = authz.getSessionUser(req).id;
       const creditBalance = await billingManager.getCreditBalance(userId);
       const coinBalance = await billingManager.getCoinBalance(userId);
 
@@ -472,13 +470,13 @@ module.exports.load = async function (app, db) {
   });
 
   // Transfer coins to another user
-  router.post('/billing/transfer-coins', validate(schemas.coinTransfer), async (req, res) => {
+  router.post('/billing/transfer-coins', financialRateLimit, validate(schemas.coinTransfer), async (req, res) => {
     try {
       if (settings.api?.client?.coins?.transfer?.enabled === false) {
         return res.status(403).json({ error: 'Coin transfers are currently disabled' });
       }
       const { recipientEmail, amount } = req.body;
-      const userId = req.session.userinfo.id;
+      const userId = authz.getSessionUser(req).id;
 
       const senderCoins = await billingManager.getCoinBalance(userId);
       if (senderCoins < amount) {

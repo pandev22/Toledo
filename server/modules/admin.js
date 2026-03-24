@@ -10,6 +10,8 @@ const cache = require('../handlers/cache.js');
 const loadConfig = require('../handlers/config.js');
 const settings = loadConfig('./config.toml');
 const { validate, schemas } = require('../handlers/validate');
+const { adminWriteRateLimit } = require('../handlers/rateLimit');
+const createAuthz = require('../handlers/authz');
 
 // Pterodactyl API helper
 const pteroApi = axios.create({
@@ -29,40 +31,6 @@ const pteroClientApi = axios.create({
     'Authorization': `Bearer ${settings.pterodactyl.client_key}`
   }
 });
-
-// Check admin status utility function with session caching
-async function checkAdminStatus(req, res, settings, db) {
-  if (!req.session.pterodactyl) return false;
-
-  const cacheKey = 'adminStatusCache';
-  const cacheExpiry = 5 * 60 * 1000; // 5 minutes
-
-  if (req.session[cacheKey] && req.session[cacheKey].timestamp) {
-    const age = Date.now() - req.session[cacheKey].timestamp;
-    if (age < cacheExpiry) {
-      return req.session[cacheKey].isAdmin;
-    }
-  }
-
-  try {
-    const user = await db.user.findUnique({ where: { id: req.session.userinfo.id }, select: { pterodactylId: true } });
-    const userId = user?.pterodactylId;
-    const response = await pteroApi.get(`/api/application/users/${userId}?include=servers`);
-    const isAdmin = response.data.attributes.root_admin === true;
-
-    req.session[cacheKey] = {
-      isAdmin,
-      timestamp: Date.now()
-    };
-
-    return isAdmin;
-  } catch (error) {
-    console.error("Error checking admin status:", error.message);
-    return false;
-  }
-}
-
-let checkAdmin = checkAdminStatus;
 
 async function getServerRuntimeStatus(serverIdentifier) {
   if (!serverIdentifier || !settings.pterodactyl.client_key) {
@@ -134,16 +102,18 @@ const HeliactylModule = {
 module.exports.HeliactylModule = HeliactylModule;
 module.exports.load = async function (app, db) {
   let configNeedsReboot = false;
+  const authz = createAuthz(db);
+  const checkAdmin = (req) => authz.getAdminStatus(req);
 
   // New /api/admin endpoint
   app.get("/api/admin", async (req, res) => {
-    const isAdmin = await checkAdminStatus(req, res, settings, db);
+    const isAdmin = await authz.getAdminStatus(req);
     res.json({ admin: isAdmin });
   });
 
   // Update dashboard name
   app.patch("/api/config/name", validate(schemas.configName), async (req, res) => {
-    if (!await checkAdmin(req, res, settings, db)) {
+    if (!await checkAdmin(req)) {
       return res.status(403).json({ error: "Unauthorized" });
     }
 
@@ -184,7 +154,7 @@ module.exports.load = async function (app, db) {
 
   // Update dashboard logo
   app.patch("/api/config/logo", validate(schemas.configLogo), async (req, res) => {
-    if (!await checkAdmin(req, res, settings, db)) {
+    if (!await checkAdmin(req)) {
       return res.status(403).json({ error: "Unauthorized" });
     }
 
@@ -225,7 +195,7 @@ module.exports.load = async function (app, db) {
 
   // Rebuild panel
   app.post("/api/panel/rebuild", async (req, res) => {
-    if (!await checkAdmin(req, res, settings, db)) {
+    if (!await checkAdmin(req)) {
       return res.status(403).json({ error: "Unauthorized" });
     }
 
@@ -267,7 +237,7 @@ module.exports.load = async function (app, db) {
 
   // Get config backups
   app.get("/api/config/backups", async (req, res) => {
-    if (!await checkAdmin(req, res, settings, db)) {
+    if (!await checkAdmin(req)) {
       return res.status(403).json({ error: "Unauthorized" });
     }
 
@@ -293,7 +263,7 @@ module.exports.load = async function (app, db) {
   });
 
   app.get("/api/config", async (req, res) => {
-    if (!await checkAdmin(req, res, settings, db)) {
+    if (!await checkAdmin(req)) {
       return res.status(403).json({ error: "Unauthorized" });
     }
 
@@ -308,7 +278,7 @@ module.exports.load = async function (app, db) {
 
   // Get specific backup
   app.get("/api/config/backups/:file", async (req, res) => {
-    if (!await checkAdmin(req, res, settings, db)) {
+    if (!await checkAdmin(req)) {
       return res.status(403).json({ error: "Unauthorized" });
     }
 
@@ -326,7 +296,7 @@ module.exports.load = async function (app, db) {
 
   // Restore from backup
   app.post("/api/config/backups/:file/restore", async (req, res) => {
-    if (!await checkAdmin(req, res, settings, db)) {
+    if (!await checkAdmin(req)) {
       return res.status(403).json({ error: "Unauthorized" });
     }
 
@@ -371,7 +341,7 @@ module.exports.load = async function (app, db) {
 
   // Delete backup
   app.delete("/api/config/backups/:file", async (req, res) => {
-    if (!await checkAdmin(req, res, settings, db)) {
+    if (!await checkAdmin(req)) {
       return res.status(403).json({ error: "Unauthorized" });
     }
 
@@ -406,7 +376,7 @@ module.exports.load = async function (app, db) {
 
   // Check if reboot is needed
   app.get("/api/reboot/status", async (req, res) => {
-    if (!await checkAdmin(req, res, settings, db)) {
+    if (!await checkAdmin(req)) {
       return res.status(403).json({ error: "Unauthorized" });
     }
 
@@ -422,7 +392,7 @@ module.exports.load = async function (app, db) {
 
   // Improved reboot endpoint
   app.post("/api/reboot", async (req, res) => {
-    if (!await checkAdmin(req, res, settings, db)) {
+    if (!await checkAdmin(req)) {
       return res.status(403).json({ error: "Unauthorized" });
     }
 
@@ -480,7 +450,7 @@ module.exports.load = async function (app, db) {
   });
 
   app.get("/api/radar/nodes", async (req, res) => {
-    if (!await checkAdmin(req, res, settings, db)) {
+    if (!await checkAdmin(req)) {
       return res.status(403).json({ error: "Unauthorized" });
     }
 
@@ -517,7 +487,7 @@ module.exports.load = async function (app, db) {
 
   // Get specific radar node
   app.get("/api/radar/nodes/:id", async (req, res) => {
-    if (!await checkAdmin(req, res, settings, db)) {
+    if (!await checkAdmin(req)) {
       return res.status(403).json({ error: "Unauthorized" });
     }
 
@@ -552,7 +522,7 @@ module.exports.load = async function (app, db) {
 
   // Add new radar node
   app.post("/api/radar/nodes", validate(schemas.nodeCreate), async (req, res) => {
-    if (!await checkAdmin(req, res, settings, db)) {
+    if (!await checkAdmin(req)) {
       return res.status(403).json({ error: "Unauthorized" });
     }
 
@@ -1016,7 +986,7 @@ module.exports.load = async function (app, db) {
 
   // Get multiple users' coins in bulk (MUST be before /api/users/:id/coins)
   app.get("/api/users/bulk/coins", async (req, res) => {
-    if (!await checkAdminStatus(req, res, settings, db)) {
+    if (!await authz.getAdminStatus(req)) {
       return res.status(403).json({ error: "Unauthorized" });
     }
 
@@ -1050,7 +1020,7 @@ module.exports.load = async function (app, db) {
 
   // Get multiple users' resources in bulk (MUST be before /api/users/:id/resources)
   app.get("/api/users/bulk/resources", async (req, res) => {
-    if (!await checkAdminStatus(req, res, settings, db)) {
+    if (!await authz.getAdminStatus(req)) {
       return res.status(403).json({ error: "Unauthorized" });
     }
 
@@ -1089,7 +1059,7 @@ module.exports.load = async function (app, db) {
 
   // Get user coins
   app.get("/api/users/:id/coins", async (req, res) => {
-    if (!await checkAdminStatus(req, res, settings, db)) {
+    if (!await authz.getAdminStatus(req)) {
       return res.status(403).json({ error: "Unauthorized" });
     }
 
@@ -1113,7 +1083,7 @@ module.exports.load = async function (app, db) {
 
   // Get user resources
   app.get("/api/users/:id/resources", async (req, res) => {
-    if (!await checkAdminStatus(req, res, settings, db)) {
+    if (!await authz.getAdminStatus(req)) {
       return res.status(403).json({ error: "Unauthorized" });
     }
 
@@ -1140,7 +1110,11 @@ module.exports.load = async function (app, db) {
     }
   });
 
-  app.get("/api/users/:id/addcoins/:coins", async (req, res) => {
+  app.get("/api/users/:id/addcoins/:coins", adminWriteRateLimit, async (req, res) => {
+    if (!await authz.getAdminStatus(req)) {
+      return res.status(403).json({ error: "Unauthorized" });
+    }
+
     try {
       const pterodactylId = req.params.id;
       const user = await db.user.findFirst({
@@ -1169,8 +1143,8 @@ module.exports.load = async function (app, db) {
   });
 
   // Update user coins
-  app.patch("/api/users/:id/coins", validate(schemas.adminSetCoins), async (req, res) => {
-    if (!await checkAdminStatus(req, res, settings, db)) {
+  app.patch("/api/users/:id/coins", adminWriteRateLimit, validate(schemas.adminSetCoins), async (req, res) => {
+    if (!await authz.getAdminStatus(req)) {
       return res.status(403).json({ error: "Unauthorized" });
     }
 
@@ -1203,8 +1177,8 @@ module.exports.load = async function (app, db) {
   });
 
   // Update user resources
-  app.patch("/api/users/:id/resources", validate(schemas.adminSetResources), async (req, res) => {
-    if (!await checkAdminStatus(req, res, settings, db)) {
+  app.patch("/api/users/:id/resources", adminWriteRateLimit, validate(schemas.adminSetResources), async (req, res) => {
+    if (!await authz.getAdminStatus(req)) {
       return res.status(403).json({ error: "Unauthorized" });
     }
 
@@ -1245,7 +1219,7 @@ module.exports.load = async function (app, db) {
 
   // Config management endpoints
   app.get("/api/config/raw", async (req, res) => {
-    if (!await checkAdminStatus(req, res, settings, db)) {
+    if (!await authz.getAdminStatus(req)) {
       return res.status(403).json({ error: "Unauthorized" });
     }
 
@@ -1260,7 +1234,7 @@ module.exports.load = async function (app, db) {
   });
 
   app.post("/api/config/raw", express.text(), async (req, res) => {
-    if (!await checkAdminStatus(req, res, settings, db)) {
+    if (!await authz.getAdminStatus(req)) {
       return res.status(403).json({ error: "Unauthorized" });
     }
 
@@ -1330,7 +1304,7 @@ module.exports.load = async function (app, db) {
   });
 
   app.post("/api/reboot", async (req, res) => {
-    if (!await checkAdminStatus(req, res, settings, db)) {
+    if (!await authz.getAdminStatus(req)) {
       return res.status(403).json({ error: "Unauthorized" });
     }
 
@@ -1347,6 +1321,7 @@ module.exports.load = async function (app, db) {
   });
 
   // Platform Statistics endpoint - accessible to all authenticated users
+  // Should be other place than admin modules because all users need access to it, not just admins
   app.get("/api/stats", async (req, res) => {
     if (!req.session.pterodactyl) {
       return res.status(401).json({ error: "Unauthorized" });

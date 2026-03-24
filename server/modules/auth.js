@@ -6,6 +6,7 @@ const axios = require("axios");
 const getPteroUser = require('../handlers/getPteroUser');
 const cache = require('../handlers/cache');
 const log = require('../handlers/log');
+const createAuthz = require('../handlers/authz');
 const { removeServerRenewal } = require('./server/renewals');
 const { validate, schemas } = require('../handlers/validate');
 const {
@@ -132,6 +133,8 @@ async function deleteOwnedServers(userId, username, db, servers) {
 
 module.exports.HeliactylModule = HeliactylModule;
 module.exports.load = async function (app, db) {
+  const authz = createAuthz(db);
+
   const sendEmail = async (to, subject, html) => {
     const response = await axios.post('https://api.resend.com/emails', {
       from: settings.api.client.resend.from,
@@ -571,6 +574,9 @@ module.exports.load = async function (app, db) {
         console.error('Session destruction error:', err);
         return res.status(500).json({ error: "Failed to logout" });
       }
+
+      authz.clearAdminCache(req);
+
       res.json({ message: "Logged out successfully" });
     });
   });

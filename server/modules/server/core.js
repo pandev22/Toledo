@@ -12,7 +12,9 @@ const settings = loadConfig("./config.toml");
 let db;
 const getPteroUser = require('../../handlers/getPteroUser');
 const NodeCache = require("node-cache");
+const createAuthz = require('../../handlers/authz');
 const serverCache = new NodeCache({ stdTTL: 60 });
+let authz;
 
 const workflowsFilePath = path.join(__dirname, "../../storage/workflows.json");
 
@@ -45,11 +47,11 @@ const ADMIN_KEY = settings.pterodactyl.key;
 
 // Middleware for authentication check
 const isAuthenticated = (req, res, next) => {
-  if (req.session.pterodactyl) {
-    next();
-  } else {
-    res.status(401).json({ error: "Unauthorized" });
+  if (!authz) {
+    return res.status(500).json({ error: 'Authentication handler is not initialized' });
   }
+
+  return authz.requirePterodactylSession(req, res, next);
 };
 
 // Fixed enhancedOwnsServer middleware with fresh Pterodactyl data
@@ -60,9 +62,16 @@ const ownsServer = async (req, res, next) => {
       return res.status(400).json({ error: 'No server ID provided' });
     }
 
-    if (!req.session.pterodactyl) {
+    if (!authz) {
+      return res.status(500).json({ error: 'Authentication handler is not initialized' });
+    }
+
+    if (!authz.hasPterodactylSession(req) || !authz.hasUserSession(req)) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
+
+    const pteroUser = authz.getPterodactylUser(req);
+    const sessionUser = authz.getSessionUser(req);
 
     // Normalize IDs for comparison
     const normalizeId = (id) => {
@@ -75,13 +84,13 @@ const ownsServer = async (req, res, next) => {
     // FIRST CHECK: Get fresh data from Pterodactyl API instead of using session data
     let isOwner = false;
     try {
-      const cacheKey = `user_servers_${req.session.pterodactyl.id}`;
+        const cacheKey = `user_servers_${pteroUser.id}`;
       let ownedServers = serverCache.get(cacheKey);
 
       if (!ownedServers) {
         // Get user's servers directly from Pterodactyl
         const userResponse = await axios.get(
-          `${PANEL_URL}/api/application/users/${req.session.pterodactyl.id}?include=servers`,
+          `${PANEL_URL}/api/application/users/${pteroUser.id}?include=servers`,
           {
             headers: {
               'Authorization': `Bearer ${ADMIN_KEY}`,
@@ -111,7 +120,7 @@ const ownsServer = async (req, res, next) => {
     // FORCE CHECK
     try {
       const forced = await db.subuserServer.findFirst({ where: { serverId, source: 'forced' } });
-      if (forced && forced.userId === req.session.userinfo.id) {
+        if (forced && forced.userId === sessionUser.id) {
         return next();
       }
     } catch (error) {
@@ -120,7 +129,7 @@ const ownsServer = async (req, res, next) => {
 
     // SECOND CHECK: Check if user is a subuser via pterodactyl username
     try {
-      const pteroUsername = req.session.pterodactyl.username;
+      const pteroUsername = pteroUser.username;
       const results = await db.subuserServer.findMany({ where: { user: { pteroUsername } } });
       const subuserServers = results.map(s => ({ id: s.serverId, name: s.serverName, ownerId: s.ownerId }));
 
@@ -138,7 +147,7 @@ const ownsServer = async (req, res, next) => {
 
     // THIRD CHECK: Check if user is a subuser via discord ID
     try {
-      const discordId = req.session.userinfo.id;
+      const discordId = sessionUser.id;
       const results = await db.subuserServer.findMany({ where: { user: { discordId } } });
       const discordServers = results.map(s => ({ id: s.serverId, name: s.serverName, ownerId: s.ownerId }));
 
@@ -175,7 +184,7 @@ const ownsServer = async (req, res, next) => {
 
       // Check if user is a subuser on this server
       const userIsSubuser = serverUsers.some(
-        user => user.attributes.id === req.session.pterodactyl.id
+        user => user.attributes.id === pteroUser.id
       );
 
       if (userIsSubuser) {
@@ -337,6 +346,7 @@ async function apiRequest(endpoint, method = "GET", body = null) {
 
 module.exports.load = async function (app, _db) {
   db = _db;
+  authz = createAuthz(_db);
 };
 
 module.exports = {

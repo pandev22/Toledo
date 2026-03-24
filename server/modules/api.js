@@ -4,6 +4,7 @@ const getPteroUser = require("../handlers/getPteroUser");
 const cache = require("../handlers/cache");
 const axios = require("axios");
 const LRU = require("lru-cache");
+const createAuthz = require('../handlers/authz');
 
 const pteroApi = axios.create({
   baseURL: settings.pterodactyl.domain,
@@ -60,10 +61,11 @@ const HeliactylModule = {
 /* Module */
 module.exports.HeliactylModule = HeliactylModule;
 module.exports.load = async function (app, db) {
+  const authz = createAuthz(db);
+
   app.get('/api/v5/state', async (req, res) => {
     try {
-      // Check if user is authenticated
-      if (!req.session || !req.session.userinfo) {
+      if (!authz.hasUserSession(req)) {
         return res.status(401).json({
           authenticated: false,
           message: 'Not authenticated'
@@ -74,8 +76,8 @@ module.exports.load = async function (app, db) {
       const twoFactorPending = !!req.session.twoFactorPending;
 
       // Get user data
-      const userId = req.session.userinfo.id;
-      const userData = req.session.userinfo;
+      const userData = authz.getSessionUser(req);
+      const userId = userData.id;
 
       // Get 2FA status
       const user = await db.user.findUnique({
@@ -89,6 +91,7 @@ module.exports.load = async function (app, db) {
         authenticated: !twoFactorPending,
         twoFactorPending: twoFactorPending,
         twoFactorEnabled: twoFactorEnabled,
+        admin: await authz.getAdminStatus(req),
         site_name: settings.website.name || "Heliactyl",
         user: {
           id: userData.id,
@@ -111,15 +114,16 @@ module.exports.load = async function (app, db) {
 
   app.get("/api/v5/resources", async (req, res) => {
     try {
-      if (!req.session || !req.session.userinfo) {
+      if (!authz.hasUserSession(req)) {
         return res.status(401).json({
           error: "Not authenticated"
         });
       }
 
-      const userId = req.session.userinfo.id;
+      const sessionUser = authz.getSessionUser(req);
+      const userId = sessionUser.id;
       const user = await db.user.findUnique({
-        where: { id: req.session.userinfo.id },
+        where: { id: sessionUser.id },
         select: {
           packageName: true,
           extraRam: true,
@@ -203,12 +207,12 @@ module.exports.load = async function (app, db) {
   });
 
   app.get("/api/coins", async (req, res) => {
-    if (!req.session.userinfo) {
+    if (!authz.hasUserSession(req)) {
       return res.status(401).json({
         error: "Not authenticated"
       });
     }
-    const userId = req.session.userinfo.id;
+    const userId = authz.getSessionUser(req).id;
     const user = await db.user.findUnique({
       where: { id: userId },
       select: { coins: true }
@@ -222,25 +226,26 @@ module.exports.load = async function (app, db) {
 
   // User
   app.get("/api/user", async (req, res) => {
-    if (!req.session.userinfo) {
+    if (!authz.hasUserSession(req)) {
       return res.status(401).json({
         error: "Not authenticated"
       });
     }
-    res.json(req.session.userinfo);
+    res.json(authz.getSessionUser(req));
   });
 
   app.get("/api/remote/user", async (req, res) => {
-    if (!req.session.pterodactyl) {
+    if (!authz.hasPterodactylSession(req)) {
       return res.status(401).json({
         error: "Not authenticated"
       });
     }
+    const pteroUser = authz.getPterodactylUser(req);
     res.json({
       user: {
-        Id: req.session.pterodactyl.id,
-        Username: req.session.pterodactyl.username,
-        Email: req.session.pterodactyl.email
+        Id: pteroUser.id,
+        Username: pteroUser.username,
+        Email: pteroUser.email
       },
       Index: 0
     });
@@ -249,15 +254,16 @@ module.exports.load = async function (app, db) {
   // Consolidated init endpoint - replaces 5+ separate calls on page load
   app.get("/api/v5/init", async (req, res) => {
     try {
-      if (!req.session || !req.session.userinfo) {
+      if (!authz.hasUserSession(req)) {
         return res.status(401).json({
           authenticated: false,
           message: 'Not authenticated'
         });
       }
 
-      const userId = req.session.userinfo.id;
-      const userData = req.session.userinfo;
+      const userData = authz.getSessionUser(req);
+      const pteroUser = authz.getPterodactylUser(req);
+      const userId = userData.id;
       const twoFactorPending = !!req.session.twoFactorPending;
 
       // Batch all DB reads in a single query
@@ -266,10 +272,10 @@ module.exports.load = async function (app, db) {
           where: { id: userId },
           select: { twoFactorEnabled: true, coins: true, pterodactylId: true }
         }),
-        req.session.pterodactyl ? db.subuserServer.findMany({
-          where: { user: { pteroUsername: req.session.pterodactyl.username }, source: 'subuser' }
+        pteroUser ? db.subuserServer.findMany({
+          where: { user: { pteroUsername: pteroUser.username }, source: 'subuser' }
         }) : Promise.resolve([]),
-        req.session.pterodactyl ? db.subuserServer.findMany({
+        pteroUser ? db.subuserServer.findMany({
           where: { userId, source: 'subuser' }
         }) : Promise.resolve([])
       ]);
@@ -280,26 +286,7 @@ module.exports.load = async function (app, db) {
       // Coins
       const coins = userRecord?.coins || 0;
 
-      // Admin check (uses session cache like original)
-      let isAdmin = false;
-      const cacheKey = 'adminStatusCache';
-      const cacheExpiry = 5 * 60 * 1000;
-      if (req.session[cacheKey] && req.session[cacheKey].timestamp) {
-        const age = Date.now() - req.session[cacheKey].timestamp;
-        if (age < cacheExpiry) {
-          isAdmin = req.session[cacheKey].isAdmin;
-        }
-      }
-      if (!isAdmin && req.session.pterodactyl) {
-        try {
-          const pteroUserId = userRecord?.pterodactylId;
-          if (pteroUserId) {
-            const adminRes = await pteroApi.get(`/api/application/users/${pteroUserId}?include=servers`);
-            isAdmin = adminRes.data.attributes.root_admin === true;
-            req.session[cacheKey] = { isAdmin, timestamp: Date.now() };
-          }
-        } catch (e) { /* not admin */ }
-      }
+      const isAdmin = await authz.getAdminStatus(req);
 
       // Servers (uses existing cache layer)
       let servers = [];
@@ -316,7 +303,7 @@ module.exports.load = async function (app, db) {
       } catch (e) { /* servers failed, non-blocking */ }
 
       // Subuser servers
-      if (req.session.pterodactyl) {
+      if (pteroUser) {
         const pteroSubs = subuserServersFromPtero || [];
         const discordSubs = subuserServersFromUserId || [];
         const serverIds = new Set(pteroSubs.map(s => s.serverId));
