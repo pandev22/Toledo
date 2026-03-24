@@ -2,6 +2,7 @@ const loadConfig = require("../handlers/config.js");
 const settings = loadConfig("./config.toml");
 const axios = require('axios');
 const { validate, schemas } = require('../handlers/validate');
+const createAuthz = require('../handlers/authz');
 
 const HeliactylModule = {
   "name": "Extras",
@@ -35,11 +36,15 @@ const pteroApi = axios.create({
 /* Module */
 module.exports.HeliactylModule = HeliactylModule;
 module.exports.load = async function (app, db) {
+  const authz = createAuthz(db);
+
   app.get(`/api/password`, async (req, res) => {
-    if (!req.session.userinfo || !req.session.userinfo.id) return res.redirect("/login");
+    if (!authz.hasUserSession(req)) return res.redirect("/login");
+    const sessionUser = authz.getSessionUser(req);
+    const pteroUser = authz.getPterodactylUser(req);
 
     const user = await db.user.findUnique({
-      where: { id: req.session.userinfo.id },
+      where: { id: sessionUser.id },
       select: { sftpPassword: true }
     });
 
@@ -50,16 +55,16 @@ module.exports.load = async function (app, db) {
     } else {
       let newpassword = makeid(settings.api.client.passwordgenerator["length"]);
 
-      await pteroApi.patch(`/api/application/users/${req.session.pterodactyl.id}`, {
-        username: req.session.pterodactyl.username,
-        email: req.session.pterodactyl.email,
-        first_name: req.session.pterodactyl.first_name,
-        last_name: req.session.pterodactyl.last_name,
+      await pteroApi.patch(`/api/application/users/${pteroUser.id}`, {
+        username: pteroUser.username,
+        email: pteroUser.email,
+        first_name: pteroUser.first_name,
+        last_name: pteroUser.last_name,
         password: newpassword
       });
 
       await db.user.update({
-        where: { id: req.session.userinfo.id },
+        where: { id: sessionUser.id },
         data: { sftpPassword: newpassword }
       });
 
@@ -72,10 +77,11 @@ module.exports.load = async function (app, db) {
   });
 
   app.get("/notifications", async (req, res) => {
-    if (!req.session.userinfo || !req.session.userinfo.id) return res.redirect("/login");
+    if (!authz.hasUserSession(req)) return res.redirect("/login");
+    const sessionUser = authz.getSessionUser(req);
 
     const notifications = await db.notification.findMany({
-      where: { userId: req.session.userinfo.id },
+      where: { userId: sessionUser.id },
       orderBy: { createdAt: 'desc' }
     });
 
@@ -83,24 +89,28 @@ module.exports.load = async function (app, db) {
   });
 
   app.get("/regen", async (req, res) => {
-    if (!req.session.pterodactyl || !req.session.userinfo) return res.redirect("/login");
+    if (!authz.hasPterodactylSession(req) || !authz.hasUserSession(req)) return res.redirect("/login");
     if (settings.api.client.allow.regen !== true) return res.send("You cannot regenerate your password currently.");
 
+    const pteroUser = authz.getPterodactylUser(req);
+    const sessionUser = authz.getSessionUser(req);
     let newpassword = makeid(settings.api.client.passwordgenerator["length"]);
     req.session.password = newpassword;
 
-    await updatePassword(req.session.pterodactyl, req.session.userinfo.id, newpassword, settings, db);
+    await updatePassword(pteroUser, sessionUser.id, newpassword, settings, db);
     res.redirect("/security");
   });
 
   app.post("/api/password/change", validate(schemas.passwordChangeDirect), async (req, res) => {
-    if (!req.session.pterodactyl || !req.session.userinfo) return res.status(401).json({ error: "Unauthorized" });
+    if (!authz.hasPterodactylSession(req) || !authz.hasUserSession(req)) return res.status(401).json({ error: "Unauthorized" });
     if (!settings.api.client.allow.regen) return res.status(403).json({ error: "Password changes are not allowed" });
 
+    const pteroUser = authz.getPterodactylUser(req);
+    const sessionUser = authz.getSessionUser(req);
     const { password } = req.body;
 
     try {
-      await updatePassword(req.session.pterodactyl, req.session.userinfo.id, password, settings, db);
+      await updatePassword(pteroUser, sessionUser.id, password, settings, db);
       res.json({ success: true, message: "Password updated successfully" });
     } catch (error) {
       console.error("Password update error:", error);

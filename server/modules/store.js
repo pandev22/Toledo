@@ -6,6 +6,7 @@ const settings = loadConfig("./config.toml");
 const log = require("../handlers/log.js");
 const adminjs = require("./admin.js");
 const { validate, schemas } = require("../handlers/validate.js");
+const createAuthz = require('../handlers/authz');
 
 const HeliactylModule = {
   "name": "Store",
@@ -243,14 +244,15 @@ module.exports.load = function (app, db) {
   const afkManager = new AFKRewardsManager(db);
   const clusterId = process.env.CLUSTER_ID || `cluster-${Math.random().toString(36).substring(7)}`;
   const store = new Store(db);
+  const authz = createAuthz(db);
 
   app.ws('/ws', async function (ws, req) {
-    if (!req.session?.userinfo) {
+    if (!authz.hasUserSession(req)) {
       ws.close(4001, 'Unauthorized');
       return;
     }
 
-    const userId = req.session.userinfo.id;
+    const userId = authz.getSessionUser(req).id;
 
     try {
       if (afkManager.hasActiveSession(userId)) {
@@ -274,9 +276,9 @@ module.exports.load = function (app, db) {
 
   app.get('/api/store/config', async (req, res) => {
     try {
-      if (!req.session?.userinfo) return res.status(401).json({ error: 'Unauthorized' });
+      if (!authz.hasUserSession(req)) return res.status(401).json({ error: 'Unauthorized' });
 
-      const userId = req.session.userinfo.id;
+      const userId = authz.getSessionUser(req).id;
       const user = await db.user.findUnique({ where: { id: userId }, select: { coins: true } });
       const userCoins = user?.coins ?? 0;
 
@@ -308,9 +310,9 @@ module.exports.load = function (app, db) {
 
   app.post('/api/store/buy', validate(schemas.storeBuy), async (req, res) => {
     try {
-      if (!req.session?.userinfo) return res.status(401).json({ error: 'Unauthorized' });
+      if (!authz.hasUserSession(req)) return res.status(401).json({ error: 'Unauthorized' });
 
-      const userId = req.session.userinfo.id;
+      const userId = authz.getSessionUser(req).id;
       const { resourceType, amount } = req.body;
 
       const cost = RESOURCE_PRICES[resourceType] * amount;
@@ -352,9 +354,10 @@ module.exports.load = function (app, db) {
 
   app.get('/api/store/history', async (req, res) => {
     try {
-      if (!req.session?.userinfo) return res.status(401).json({ error: 'Unauthorized' });
+      if (!authz.hasUserSession(req)) return res.status(401).json({ error: 'Unauthorized' });
+      const userId = authz.getSessionUser(req).id;
       const history = await db.transaction.findMany({
-        where: { userId: req.session.userinfo.id, type: 'store_purchase' },
+        where: { userId, type: 'store_purchase' },
         orderBy: { createdAt: 'desc' }
       });
       res.json(history.map(h => ({
@@ -368,9 +371,10 @@ module.exports.load = function (app, db) {
 
   app.get('/api/store/resources', async (req, res) => {
     try {
-      if (!req.session?.userinfo) return res.status(401).json({ error: 'Unauthorized' });
+      if (!authz.hasUserSession(req)) return res.status(401).json({ error: 'Unauthorized' });
+      const userId = authz.getSessionUser(req).id;
       const user = await db.user.findUnique({
-        where: { id: req.session.userinfo.id },
+        where: { id: userId },
         select: { extraRam: true, extraDisk: true, extraCpu: true, extraServers: true }
       });
       res.json({
@@ -387,6 +391,7 @@ module.exports.load = function (app, db) {
   app.get("/buyram", async (req, res) => {
     let newsettings = await enabledCheck(req, res);
     if (newsettings) {
+      const sessionUser = authz.getSessionUser(req);
       let amount = req.query.amount;
       if (!amount) return res.send("missing amount");
       amount = parseFloat(amount);
@@ -396,7 +401,7 @@ module.exports.load = function (app, db) {
       let theme = indexjs.get(req);
       let failedcallback = theme.settings.redirect.failedpurchaseram ? theme.settings.redirect.failedpurchaseram : "/";
 
-      const user = await db.user.findUnique({ where: { id: req.session.userinfo.id } });
+      const user = await db.user.findUnique({ where: { id: sessionUser.id } });
       let usercoins = user?.coins ?? 0;
       let ramcap = Math.floor((user?.extraRam ?? 0) / 1024);
 
@@ -410,15 +415,15 @@ module.exports.load = function (app, db) {
       let newusercoins = usercoins - cost;
       
       await db.user.update({
-        where: { id: req.session.userinfo.id },
+        where: { id: sessionUser.id },
         data: {
           coins: newusercoins,
           extraRam: { increment: per }
         }
       });
 
-      adminjs.suspend(req.session.userinfo.id, settings, db);
-      log(`Resources Purchased`, `${req.session.userinfo.username}#${req.session.userinfo.discriminator} bought ${per}MB ram from the store for \`${cost}\` Credits.`);
+      adminjs.suspend(sessionUser.id, settings, db);
+      log(`Resources Purchased`, `${sessionUser.username}#${sessionUser.discriminator} bought ${per}MB ram from the store for \`${cost}\` Credits.`);
       res.redirect((theme.settings.redirect.purchaseram ? theme.settings.redirect.purchaseram : "/") + "?err=none");
     }
   });
@@ -426,6 +431,7 @@ module.exports.load = function (app, db) {
   app.get("/buydisk", async (req, res) => {
     let newsettings = await enabledCheck(req, res);
     if (newsettings) {
+      const sessionUser = authz.getSessionUser(req);
       let amount = req.query.amount;
       if (!amount) return res.send("missing amount");
       amount = parseFloat(amount);
@@ -435,7 +441,7 @@ module.exports.load = function (app, db) {
       let theme = indexjs.get(req);
       let failedcallback = theme.settings.redirect.failedpurchasedisk ? theme.settings.redirect.failedpurchasedisk : "/";
 
-      const user = await db.user.findUnique({ where: { id: req.session.userinfo.id } });
+      const user = await db.user.findUnique({ where: { id: sessionUser.id } });
       let usercoins = user?.coins ?? 0;
       let diskcap = Math.floor((user?.extraDisk ?? 0) / 5120);
 
@@ -449,15 +455,15 @@ module.exports.load = function (app, db) {
       let newusercoins = usercoins - cost;
 
       await db.user.update({
-        where: { id: req.session.userinfo.id },
+        where: { id: sessionUser.id },
         data: {
           coins: newusercoins,
           extraDisk: { increment: per }
         }
       });
 
-      adminjs.suspend(req.session.userinfo.id, settings, db);
-      log(`Resources Purchased`, `${req.session.userinfo.username}#${req.session.userinfo.discriminator} bought ${per}MB disk from the store for \`${cost}\` Credits.`);
+      adminjs.suspend(sessionUser.id, settings, db);
+      log(`Resources Purchased`, `${sessionUser.username}#${sessionUser.discriminator} bought ${per}MB disk from the store for \`${cost}\` Credits.`);
       res.redirect((theme.settings.redirect.purchasedisk ? theme.settings.redirect.purchasedisk : "/") + "?err=none");
     }
   });
@@ -465,6 +471,7 @@ module.exports.load = function (app, db) {
   app.get("/buycpu", async (req, res) => {
     let newsettings = await enabledCheck(req, res);
     if (newsettings) {
+      const sessionUser = authz.getSessionUser(req);
       let amount = req.query.amount;
       if (!amount) return res.send("missing amount");
       amount = parseFloat(amount);
@@ -474,7 +481,7 @@ module.exports.load = function (app, db) {
       let theme = indexjs.get(req);
       let failedcallback = theme.settings.redirect.failedpurchasecpu ? theme.settings.redirect.failedpurchasecpu : "/";
 
-      const user = await db.user.findUnique({ where: { id: req.session.userinfo.id } });
+      const user = await db.user.findUnique({ where: { id: sessionUser.id } });
       let usercoins = user?.coins ?? 0;
       let cpucap = Math.floor((user?.extraCpu ?? 0) / 100);
 
@@ -488,15 +495,15 @@ module.exports.load = function (app, db) {
       let newusercoins = usercoins - cost;
 
       await db.user.update({
-        where: { id: req.session.userinfo.id },
+        where: { id: sessionUser.id },
         data: {
           coins: newusercoins,
           extraCpu: { increment: per }
         }
       });
 
-      adminjs.suspend(req.session.userinfo.id, settings, db);
-      log(`Resources Purchased`, `${req.session.userinfo.username}#${req.session.userinfo.discriminator} bought ${per}% CPU from the store for \`${cost}\` Credits.`);
+      adminjs.suspend(sessionUser.id, settings, db);
+      log(`Resources Purchased`, `${sessionUser.username}#${sessionUser.discriminator} bought ${per}% CPU from the store for \`${cost}\` Credits.`);
       res.redirect((theme.settings.redirect.purchasecpu ? theme.settings.redirect.purchasecpu : "/") + "?err=none");
     }
   });
@@ -504,6 +511,7 @@ module.exports.load = function (app, db) {
   app.get("/buyservers", async (req, res) => {
     let newsettings = await enabledCheck(req, res);
     if (newsettings) {
+      const sessionUser = authz.getSessionUser(req);
       let amount = req.query.amount;
       if (!amount) return res.send("missing amount");
       amount = parseFloat(amount);
@@ -513,7 +521,7 @@ module.exports.load = function (app, db) {
       let theme = indexjs.get(req);
       let failedcallback = theme.settings.redirect.failedpurchaseservers ? theme.settings.redirect.failedpurchaseservers : "/";
 
-      const user = await db.user.findUnique({ where: { id: req.session.userinfo.id } });
+      const user = await db.user.findUnique({ where: { id: sessionUser.id } });
       let usercoins = user?.coins ?? 0;
       let serverscap = user?.extraServers ?? 0;
 
@@ -527,15 +535,15 @@ module.exports.load = function (app, db) {
       let newusercoins = usercoins - cost;
 
       await db.user.update({
-        where: { id: req.session.userinfo.id },
+        where: { id: sessionUser.id },
         data: {
           coins: newusercoins,
           extraServers: { increment: per }
         }
       });
 
-      adminjs.suspend(req.session.userinfo.id, settings, db);
-      log(`Resources Purchased`, `${req.session.userinfo.username}#${req.session.userinfo.discriminator} bought ${per} Slots from the store for \`${cost}\` Credits.`);
+      adminjs.suspend(sessionUser.id, settings, db);
+      log(`Resources Purchased`, `${sessionUser.username}#${sessionUser.discriminator} bought ${per} Slots from the store for \`${cost}\` Credits.`);
       res.redirect((theme.settings.redirect.purchaseservers ? theme.settings.redirect.purchaseservers : "/") + "?err=none");
     }
   });

@@ -7,6 +7,7 @@ const getPteroUser = require('../../handlers/getPteroUser');
 const log = require('../../handlers/log');
 const cache = require('../../handlers/cache');
 const { validate, schemas } = require('../../handlers/validate');
+const createAuthz = require('../../handlers/authz');
 const { initializeServerRenewal, removeServerRenewal } = require('./renewals.js');
 
 // Dynamic eggs helper - will be initialized in load()
@@ -116,6 +117,7 @@ async function checkUserResources(userId, db, additionalResources = { ram: 0, di
 // Main module export
 module.exports.load = async function (app, db) {
     const router = express.Router();
+    const authz = createAuthz(db);
 
     // Initialize dynamic eggs helper
     try {
@@ -135,17 +137,13 @@ module.exports.load = async function (app, db) {
     }
 
     // Middleware to check authentication
-    router.use((req, res, next) => {
-        if (!req.session.pterodactyl) {
-            return res.status(401).json({ error: 'Unauthorized' });
-        }
-        next();
-    });
+    router.use(authz.requirePterodactylSession);
 
     router.get('/eggs', async (req, res) => {
         try {
+            const sessionUser = authz.getSessionUser(req);
             // Get package name for restriction checking (with cache)
-            const userRecord = await db.user.findUnique({ where: { id: req.session.userinfo.id }, select: { packageName: true } });
+            const userRecord = await db.user.findUnique({ where: { id: sessionUser.id }, select: { packageName: true } });
             const packageName = userRecord?.packageName;
             const userPackage = settings.api.client.packages.list[packageName || settings.api.client.packages.default];
 
@@ -203,7 +201,8 @@ module.exports.load = async function (app, db) {
     // GET /api/locations - List all available locations
     router.get('/locations', async (req, res) => {
         try {
-            const userRecord = await db.user.findUnique({ where: { id: req.session.userinfo.id }, select: { packageName: true } });
+            const sessionUser = authz.getSessionUser(req);
+            const userRecord = await db.user.findUnique({ where: { id: sessionUser.id }, select: { packageName: true } });
             const packageName = userRecord?.packageName;
             const activePackage = packageName || settings.api.client.packages.default;
 
@@ -291,8 +290,9 @@ module.exports.load = async function (app, db) {
     // GET /api/resources - Get user's resource usage and limits
     router.get('/resources', async (req, res) => {
         try {
+            const sessionUser = authz.getSessionUser(req);
             // Get package information (with cache)
-            const userRecord = await db.user.findUnique({ where: { id: req.session.userinfo.id }, select: { packageName: true, extraRam: true, extraDisk: true, extraCpu: true, extraServers: true } });
+            const userRecord = await db.user.findUnique({ where: { id: sessionUser.id }, select: { packageName: true, extraRam: true, extraDisk: true, extraCpu: true, extraServers: true } });
             const packageName = userRecord?.packageName;
             const packageConfig = settings.api.client.packages.list[packageName || settings.api.client.packages.default];
 
@@ -309,7 +309,7 @@ module.exports.load = async function (app, db) {
                 servers: 0
             };
             // Get current resource usage
-            const resources = await checkUserResources(req.session.userinfo.id, db);
+            const resources = await checkUserResources(sessionUser.id, db);
 
             // Calculate percentages
             const percentages = {
@@ -350,9 +350,10 @@ module.exports.load = async function (app, db) {
     // GET /api/servers - List all servers
     router.get('/servers', async (req, res) => {
         try {
+            const sessionUser = authz.getSessionUser(req);
             const user = await cache.getOrSet(
-                `ptero:user:${req.session.userinfo.id}:servers`,
-                () => getPteroUser(req.session.userinfo.id, db),
+                `ptero:user:${sessionUser.id}:servers`,
+                () => getPteroUser(sessionUser.id, db),
                 300
             );
             if (!user) {
@@ -373,9 +374,10 @@ module.exports.load = async function (app, db) {
     // GET /api/servers/:id - Get specific server
     router.get('/server/:id', async (req, res) => {
         try {
+            const sessionUser = authz.getSessionUser(req);
             const user = await cache.getOrSet(
-                `ptero:user:${req.session.userinfo.id}:servers`,
-                () => getPteroUser(req.session.userinfo.id, db),
+                `ptero:user:${sessionUser.id}:servers`,
+                () => getPteroUser(sessionUser.id, db),
                 300
             );
             const server = user.attributes.relationships.servers.data.find(
@@ -395,17 +397,17 @@ module.exports.load = async function (app, db) {
     // POST /api/v5/servers - Create new server
     router.post('/servers', validate(schemas.serverCreate), async (req, res) => {
         try {
-            if (!req.session.pterodactyl) return res.status(401).json({ error: 'Unauthorized' });
+            const sessionUser = authz.getSessionUser(req);
 
             const { name, egg, location, ram, disk, cpu } = req.body;
 
             // Get user's current resource usage and limits (with cache)
             const user = await cache.getOrSet(
-                `ptero:user:${req.session.userinfo.id}:servers`,
-                () => getPteroUser(req.session.userinfo.id, db),
+                `ptero:user:${sessionUser.id}:servers`,
+                () => getPteroUser(sessionUser.id, db),
                 300
             );
-            const userRecord = await db.user.findUnique({ where: { id: req.session.userinfo.id }, select: { packageName: true, extraRam: true, extraDisk: true, extraCpu: true, extraServers: true, pterodactylId: true } });
+            const userRecord = await db.user.findUnique({ where: { id: sessionUser.id }, select: { packageName: true, extraRam: true, extraDisk: true, extraCpu: true, extraServers: true, pterodactylId: true } });
             const packageName = userRecord?.packageName;
             const packageConfig = settings.api.client.packages.list[packageName || settings.api.client.packages.default];
             const extra = userRecord ? {
@@ -552,7 +554,7 @@ module.exports.load = async function (app, db) {
                 await initializeServerRenewal(
                     db,
                     response.data.attributes,
-                    req.session.userinfo.id
+                    sessionUser.id
                 );
             } catch (renewalError) {
                 console.error('Failed to initialize server renewal:', renewalError);
@@ -560,12 +562,12 @@ module.exports.load = async function (app, db) {
 
             // Log server creation
             log('server_created',
-                `User ${req.session.userinfo.username} created server "${name}" ` +
+                `User ${sessionUser.username} created server "${name}" ` +
                 `(RAM: ${ram}MB, CPU: ${cpu}%, Disk: ${disk}MB)`
             );
 
             // Invalidate user servers cache
-            await cache.del(`ptero:user:${req.session.userinfo.id}:servers`);
+            await cache.del(`ptero:user:${sessionUser.id}:servers`);
 
             res.status(201).json(response.data);
         } catch (error) {
@@ -581,18 +583,18 @@ module.exports.load = async function (app, db) {
     // PATCH /api/v5/servers/:idOrIdentifier - Modify server
     router.patch('/servers/:idOrIdentifier', validate(schemas.serverModify), async (req, res) => {
         try {
-            if (!req.session.pterodactyl) return res.status(401).json({ error: 'Unauthorized' });
+            const sessionUser = authz.getSessionUser(req);
 
             const { ram, disk, cpu } = req.body;
             const idOrIdentifier = req.params.idOrIdentifier;
 
             // Get user's current resources and limits (with cache)
             const user = await cache.getOrSet(
-                `ptero:user:${req.session.userinfo.id}:servers`,
-                () => getPteroUser(req.session.userinfo.id, db),
+                `ptero:user:${sessionUser.id}:servers`,
+                () => getPteroUser(sessionUser.id, db),
                 300
             );
-            const userRecord = await db.user.findUnique({ where: { id: req.session.userinfo.id }, select: { packageName: true, extraRam: true, extraDisk: true, extraCpu: true, extraServers: true } });
+            const userRecord = await db.user.findUnique({ where: { id: sessionUser.id }, select: { packageName: true, extraRam: true, extraDisk: true, extraCpu: true, extraServers: true } });
             const packageName = userRecord?.packageName;
             const packageConfig = settings.api.client.packages.list[packageName || settings.api.client.packages.default];
             const extra = userRecord ? {
@@ -716,7 +718,7 @@ module.exports.load = async function (app, db) {
 
             // Log the modification
             log('server_modified',
-                `User ${req.session.userinfo.username} modified server "${server.attributes.name}" ` +
+                `User ${sessionUser.username} modified server "${server.attributes.name}" ` +
                 `(RAM: ${ram}MB, CPU: ${cpu}%, Disk: ${disk}MB)`
             );
 
@@ -733,14 +735,14 @@ module.exports.load = async function (app, db) {
     // DELETE /api/v5/servers/:idOrIdentifier - Delete server
     router.delete('/servers/:idOrIdentifier', async (req, res) => {
         try {
-            if (!req.session.pterodactyl) return res.status(401).json({ error: 'Unauthorized' });
+            const sessionUser = authz.getSessionUser(req);
 
             const idOrIdentifier = req.params.idOrIdentifier;
 
             // Get user's current resources and servers (with cache)
             const user = await cache.getOrSet(
-                `ptero:user:${req.session.userinfo.id}:servers`,
-                () => getPteroUser(req.session.userinfo.id, db),
+                `ptero:user:${sessionUser.id}:servers`,
+                () => getPteroUser(sessionUser.id, db),
                 300
             );
             if (!user) {
@@ -804,11 +806,11 @@ module.exports.load = async function (app, db) {
 
             // Log the deletion
             log('server_deleted',
-                `User ${req.session.userinfo.username} deleted server "${server.attributes.name}"`
+                `User ${sessionUser.username} deleted server "${server.attributes.name}"`
             );
 
             // Invalidate user servers cache
-            await cache.del(`ptero:user:${req.session.userinfo.id}:servers`);
+            await cache.del(`ptero:user:${sessionUser.id}:servers`);
 
             res.status(204).send();
         } catch (error) {
@@ -824,11 +826,12 @@ module.exports.load = async function (app, db) {
     router.get('/server/:id/minecraft-status', async (req, res) => {
         try {
             const serverId = req.params.id;
+            const sessionUser = authz.getSessionUser(req);
 
             // Verify user owns this server (with cache)
             const user = await cache.getOrSet(
-                `ptero:user:${req.session.userinfo.id}:servers`,
-                () => getPteroUser(req.session.userinfo.id, db),
+                `ptero:user:${sessionUser.id}:servers`,
+                () => getPteroUser(sessionUser.id, db),
                 300
             );
             const server = user.attributes.relationships.servers.data.find(

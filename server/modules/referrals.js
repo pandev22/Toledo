@@ -1,3 +1,5 @@
+const createAuthz = require('../handlers/authz');
+
 const HeliactylModule = {
   "name": "Referrals",
   "version": "1.0.0",
@@ -21,9 +23,12 @@ const HeliactylModule = {
 /* Module */
 module.exports.HeliactylModule = HeliactylModule;
 module.exports.load = async function (app, db) {
+  const authz = createAuthz(db);
+
   app.get('/generate', async (req, res) => {
-    if (!req.session?.userinfo) return res.redirect("/login");
-    if (!req.session.pterodactyl) return res.redirect("/login");
+    if (!authz.hasUserSession(req)) return res.redirect("/login");
+    if (!authz.hasPterodactylSession(req)) return res.redirect("/login");
+    const sessionUser = authz.getSessionUser(req);
 
     if (!req.query.code) {
       return res.json({ error: "No code provided" });
@@ -46,19 +51,20 @@ module.exports.load = async function (app, db) {
 
     // Save the referral code
     await db.referral.create({
-      data: {
-        code: referralCode,
-        userId: req.session.userinfo.id,
-        createdAt: new Date()
-      }
+        data: {
+          code: referralCode,
+          userId: sessionUser.id,
+          createdAt: new Date()
+        }
     });
 
     res.json({ success: "Referral code created" });
   });
 
   app.get('/claim', async (req, res) => {
-    if (!req.session?.userinfo) return res.redirect("/login");
-    if (!req.session.pterodactyl) return res.redirect("/login");
+    if (!authz.hasUserSession(req)) return res.redirect("/login");
+    if (!authz.hasPterodactylSession(req)) return res.redirect("/login");
+    const sessionUser = authz.getSessionUser(req);
 
     // Get the referral code from the query
     if (!req.query.code) {
@@ -78,7 +84,7 @@ module.exports.load = async function (app, db) {
 
     // Check if user has already claimed a code
     const alreadyClaimed = await db.referral.findFirst({
-      where: { claimedById: req.session.userinfo.id }
+      where: { claimedById: sessionUser.id }
     });
 
     if (alreadyClaimed) {
@@ -86,7 +92,7 @@ module.exports.load = async function (app, db) {
     }
 
     // Check if the referral code was created by the user
-    if (referral.userId === req.session.userinfo.id) {
+    if (referral.userId === sessionUser.id) {
       return res.json({ error: "Cannot claim your own code" });
     }
 
@@ -109,19 +115,19 @@ module.exports.load = async function (app, db) {
             userId: referral.userId,
             type: 'earn',
             amount: 80,
-            description: `Referral bonus from claimer ${req.session.userinfo.id}`
+            description: `Referral bonus from claimer ${sessionUser.id}`
           }
         });
 
         // Award the claimer
         await tx.user.update({
-          where: { id: req.session.userinfo.id },
+          where: { id: sessionUser.id },
           data: { coins: { increment: 250 } }
         });
 
         await tx.transaction.create({
           data: {
-            userId: req.session.userinfo.id,
+            userId: sessionUser.id,
             type: 'earn',
             amount: 250,
             description: `Claimed referral code: ${referralCode}`
@@ -132,7 +138,7 @@ module.exports.load = async function (app, db) {
         await tx.referral.update({
           where: { id: referral.id },
           data: {
-            claimedById: req.session.userinfo.id,
+            claimedById: sessionUser.id,
             claimedAt: new Date()
           }
         });

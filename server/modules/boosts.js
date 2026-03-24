@@ -4,6 +4,7 @@ const fs = require("fs");
 const loadConfig = require("../handlers/config.js");
 const settings = loadConfig("./config.toml");
 const { validate, schemas } = require('../handlers/validate');
+const createAuthz = require('../handlers/authz');
 
 const HeliactylModule = {
   "name": "Boosts",
@@ -786,6 +787,7 @@ class BoostManager {
 
 module.exports.load = function (app, db) {
   const boostManager = new BoostManager(db);
+  const authz = createAuthz(db);
 
   // Middleware to check if boosts are enabled
   function boostsEnabled(req, res, next) {
@@ -811,15 +813,16 @@ module.exports.load = function (app, db) {
   // Get active boosts for a server
   app.get('/api/boosts/server/:serverId', boostsEnabled, async (req, res) => {
     try {
-      if (!req.session.userinfo) return res.status(401).json({ error: 'Unauthorized' });
+      if (!authz.hasUserSession(req)) return res.status(401).json({ error: 'Unauthorized' });
 
       const { serverId } = req.params;
       const activeBoosts = await boostManager.getServerActiveBoosts(serverId);
+      const sessionUser = authz.getSessionUser(req);
 
       // Only return boosts owned by the requesting user
       const userBoosts = {};
       for (const [boostId, boost] of Object.entries(activeBoosts)) {
-        if (boost.userId === req.session.userinfo.id) {
+        if (boost.userId === sessionUser.id) {
           userBoosts[boostId] = boost;
         }
       }
@@ -834,9 +837,9 @@ module.exports.load = function (app, db) {
   // Get all active boosts for the user
   app.get('/api/boosts/active', boostsEnabled, async (req, res) => {
     try {
-      if (!req.session.userinfo) return res.status(401).json({ error: 'Unauthorized' });
+      if (!authz.hasUserSession(req)) return res.status(401).json({ error: 'Unauthorized' });
 
-      const userId = req.session.userinfo.id;
+      const userId = authz.getSessionUser(req).id;
       const activeBoosts = await boostManager.getUserActiveBoosts(userId);
 
       res.json(activeBoosts);
@@ -849,9 +852,9 @@ module.exports.load = function (app, db) {
   // Get scheduled boosts
   app.get('/api/boosts/scheduled', boostsEnabled, async (req, res) => {
     try {
-      if (!req.session.userinfo) return res.status(401).json({ error: 'Unauthorized' });
+      if (!authz.hasUserSession(req)) return res.status(401).json({ error: 'Unauthorized' });
 
-      const userId = req.session.userinfo.id;
+      const userId = authz.getSessionUser(req).id;
       const scheduledBoosts = await boostManager.getScheduledBoosts(userId);
 
       res.json(scheduledBoosts);
@@ -864,9 +867,9 @@ module.exports.load = function (app, db) {
   // Get boost history
   app.get('/api/boosts/history', boostsEnabled, async (req, res) => {
     try {
-      if (!req.session.userinfo) return res.status(401).json({ error: 'Unauthorized' });
+      if (!authz.hasUserSession(req)) return res.status(401).json({ error: 'Unauthorized' });
 
-      const userId = req.session.userinfo.id;
+      const userId = authz.getSessionUser(req).id;
       const limit = req.query.limit ? parseInt(req.query.limit) : 20;
 
       const history = await boostManager.getBoostHistory(userId, limit);
@@ -881,9 +884,9 @@ module.exports.load = function (app, db) {
   // Apply boost to a server
   app.post('/api/boosts/apply', boostsEnabled, validate(schemas.boostApply), async (req, res) => {
     try {
-      if (!req.session.userinfo) return res.status(401).json({ error: 'Unauthorized' });
+      if (!authz.hasUserSession(req)) return res.status(401).json({ error: 'Unauthorized' });
 
-      const userId = req.session.userinfo.id;
+      const userId = authz.getSessionUser(req).id;
       const { serverId, boostType, duration } = req.body;
 
       // Fetch server info to get current resources
@@ -932,9 +935,9 @@ module.exports.load = function (app, db) {
   // Cancel an active boost
   app.post('/api/boosts/cancel', boostsEnabled, validate(schemas.boostCancel), async (req, res) => {
     try {
-      if (!req.session.userinfo) return res.status(401).json({ error: 'Unauthorized' });
+      if (!authz.hasUserSession(req)) return res.status(401).json({ error: 'Unauthorized' });
 
-      const userId = req.session.userinfo.id;
+      const userId = authz.getSessionUser(req).id;
       const { serverId, boostId } = req.body;
 
       const result = await boostManager.cancelBoost(userId, serverId, boostId);
@@ -956,9 +959,9 @@ module.exports.load = function (app, db) {
   // Extend an active boost
   app.post('/api/boosts/extend', boostsEnabled, validate(schemas.boostExtend), async (req, res) => {
     try {
-      if (!req.session.userinfo) return res.status(401).json({ error: 'Unauthorized' });
+      if (!authz.hasUserSession(req)) return res.status(401).json({ error: 'Unauthorized' });
 
-      const userId = req.session.userinfo.id;
+      const userId = authz.getSessionUser(req).id;
       const { serverId, boostId, additionalDuration } = req.body;
 
       const result = await boostManager.extendBoost(
@@ -985,9 +988,9 @@ module.exports.load = function (app, db) {
   // Schedule a boost for the future
   app.post('/api/boosts/schedule', boostsEnabled, validate(schemas.boostSchedule), async (req, res) => {
     try {
-      if (!req.session.userinfo) return res.status(401).json({ error: 'Unauthorized' });
+      if (!authz.hasUserSession(req)) return res.status(401).json({ error: 'Unauthorized' });
 
-      const userId = req.session.userinfo.id;
+      const userId = authz.getSessionUser(req).id;
       const { serverId, boostType, duration, startTime } = req.body;
 
       // Fetch server info to get current resources
@@ -1037,9 +1040,9 @@ module.exports.load = function (app, db) {
   // Cancel a scheduled boost
   app.post('/api/boosts/cancel-scheduled', boostsEnabled, validate(schemas.boostCancelScheduled), async (req, res) => {
     try {
-      if (!req.session.userinfo) return res.status(401).json({ error: 'Unauthorized' });
+      if (!authz.hasUserSession(req)) return res.status(401).json({ error: 'Unauthorized' });
 
-      const userId = req.session.userinfo.id;
+      const userId = authz.getSessionUser(req).id;
       const { scheduledBoostId } = req.body;
 
       const result = await boostManager.cancelScheduledBoost(userId, scheduledBoostId);

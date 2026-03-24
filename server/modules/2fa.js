@@ -6,6 +6,7 @@ const axios = require('axios');
 const loadConfig = require("../handlers/config.js");
 const settings = loadConfig("./config.toml");
 const { validate, schemas } = require('../handlers/validate');
+const createAuthz = require('../handlers/authz');
 
 const HeliactylModule = {
   "name": "Two-factor authentication",
@@ -69,18 +70,13 @@ function generateBackupCodes(count = 8) {
 // Setup routes for 2FA
 module.exports.HeliactylModule = HeliactylModule;
 module.exports.load = async function (app, db) {
-  // Middleware to check if user is authenticated
-  const isAuthenticated = (req, res, next) => {
-    if (req.session && req.session.userinfo) {
-      return next();
-    }
-    res.status(401).json({ error: 'Authentication required' });
-  };
+  const authz = createAuthz(db);
+  const isAuthenticated = authz.requireSession;
 
   // Get 2FA status
   app.get('/api/2fa/status', isAuthenticated, async (req, res) => {
     try {
-      const userId = req.session.userinfo.id;
+      const userId = authz.getSessionUser(req).id;
       const user = await db.user.findUnique({
         where: { id: userId },
         select: { twoFactorEnabled: true }
@@ -98,8 +94,9 @@ module.exports.load = async function (app, db) {
   // Initialize 2FA setup
   app.post('/api/2fa/setup', isAuthenticated, async (req, res) => {
     try {
-      const userId = req.session.userinfo.id;
-      const username = req.session.userinfo.username;
+      const sessionUser = authz.getSessionUser(req);
+      const userId = sessionUser.id;
+      const username = sessionUser.username;
 
       // Generate a new secret
       const secret = speakeasy.generateSecret({
@@ -130,7 +127,7 @@ module.exports.load = async function (app, db) {
   app.post('/api/2fa/verify', isAuthenticated, validate(schemas.twoFactorVerify), async (req, res) => {
     try {
       const { token: code, secret } = req.body;
-      const userId = req.session.userinfo.id;
+      const userId = authz.getSessionUser(req).id;
 
       if (!secret) {
         return res.status(400).json({ error: 'Secret is required' });
@@ -185,7 +182,7 @@ module.exports.load = async function (app, db) {
   // Disable 2FA
   app.post('/api/2fa/disable', isAuthenticated, validate(schemas.twoFactorDisable), async (req, res) => {
     try {
-      const userId = req.session.userinfo.id;
+      const userId = authz.getSessionUser(req).id;
       const { currentPassword } = req.body;
 
       // Check if 2FA is enabled
@@ -226,7 +223,7 @@ module.exports.load = async function (app, db) {
   // Get new backup codes
   app.post('/api/2fa/backup-codes', isAuthenticated, async (req, res) => {
     try {
-      const userId = req.session.userinfo.id;
+      const userId = authz.getSessionUser(req).id;
 
       // Check if 2FA is enabled
       const user = await db.user.findUnique({

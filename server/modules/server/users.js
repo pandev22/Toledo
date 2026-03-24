@@ -9,6 +9,7 @@ const loadConfig = require("../../handlers/config.js");
 const settings = loadConfig("./config.toml");
 let db;
 const { validate, schemas } = require('../../handlers/validate');
+const createAuthz = require('../../handlers/authz');
 
 /* --------------------------------------------- */
 /* Heliactyl Next Module                                  */
@@ -95,6 +96,7 @@ module.exports.updateSubuserInfo = updateSubuserInfo;
 module.exports.load = async function (app, _db) {
   db = _db;
   const router = express.Router();
+  const authz = createAuthz(_db);
 
   // GET /api/server/:id/users - List users
   router.get('/server/:id/users', isAuthenticated, ownsServer, async (req, res) => {
@@ -111,7 +113,7 @@ module.exports.load = async function (app, _db) {
         }
       );
 
-      await updateSubuserInfo(serverId, req.session.userinfo.id);
+      await updateSubuserInfo(serverId, authz.getSessionUser(req).id);
 
       res.json(response.data);
     } catch (error) {
@@ -152,7 +154,7 @@ module.exports.load = async function (app, _db) {
         }
       );
 
-      await updateSubuserInfo(serverId, req.session.userinfo.id);
+      await updateSubuserInfo(serverId, authz.getSessionUser(req).id);
       await addUserToAllUsersList(response.data.attributes.username);
 
       res.status(201).json(response.data);

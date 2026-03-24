@@ -114,9 +114,8 @@ module.exports.load = async function (app, db) {
   }
 
   // Server transfer endpoint
-  router.get("/server/transfer", isAuthenticated, async (req, res) => {
+  router.get("/server/transfer", isAuthenticated, ownsServer, async (req, res) => {
     const { id, nodeId } = req.query;
-    const userId = req.session.pterodactyl.id;
 
     if (!id || !nodeId) {
       return res.status(400).json({ error: "Missing required parameters: id or nodeId" });

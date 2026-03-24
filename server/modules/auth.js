@@ -541,12 +541,11 @@ module.exports.load = async function (app, db) {
   });
 
   app.post("/api/user/logout", async (req, res) => {
-    // Check if user is logged in
-    if (!req.session.userinfo) {
+    if (!authz.hasUserSession(req)) {
       return res.status(401).json({ error: "Not logged in" });
     }
 
-    const userId = req.session.userinfo.id;
+    const userId = authz.getSessionUser(req).id;
 
     try {
       if (userId) {
@@ -582,11 +581,11 @@ module.exports.load = async function (app, db) {
   });
 
   app.delete("/api/user/account", async (req, res) => {
-    if (!req.session.userinfo) {
+    if (!authz.hasUserSession(req)) {
       return res.status(401).json({ error: "Not authenticated" });
     }
 
-    const sessionUser = req.session.userinfo;
+    const sessionUser = authz.getSessionUser(req);
 
     try {
       const user = await db.user.findUnique({

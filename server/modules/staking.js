@@ -3,6 +3,7 @@ const fs = require("fs");
 const loadConfig = require("../handlers/config.js");
 const settings = loadConfig("./config.toml");
 const { validate, schemas } = require('../handlers/validate');
+const createAuthz = require('../handlers/authz');
 
 const HeliactylModule = {
   "name": "Staking",
@@ -326,6 +327,7 @@ class StakingManager {
 
 module.exports.load = function (app, db) {
   const stakingManager = new StakingManager(db);
+  const authz = createAuthz(db);
 
   // ==== API ENDPOINTS ====
 
@@ -343,9 +345,9 @@ module.exports.load = function (app, db) {
   // Get user's stakes
   app.get('/api/staking/stakes', async (req, res) => {
     try {
-      if (!req.session.userinfo) return res.status(401).json({ error: 'Unauthorized' });
+      if (!authz.hasUserSession(req)) return res.status(401).json({ error: 'Unauthorized' });
 
-      const userId = req.session.userinfo.id;
+      const userId = authz.getSessionUser(req).id;
       const stakes = await stakingManager.getUserStakes(userId);
       res.json(stakes);
     } catch (error) {
@@ -357,9 +359,9 @@ module.exports.load = function (app, db) {
   // Get user's staking summary
   app.get('/api/staking/summary', async (req, res) => {
     try {
-      if (!req.session.userinfo) return res.status(401).json({ error: 'Unauthorized' });
+      if (!authz.hasUserSession(req)) return res.status(401).json({ error: 'Unauthorized' });
 
-      const userId = req.session.userinfo.id;
+      const userId = authz.getSessionUser(req).id;
       const summary = await stakingManager.getStakingSummary(userId);
       res.json(summary);
     } catch (error) {
@@ -371,9 +373,9 @@ module.exports.load = function (app, db) {
   // Create a new stake
   app.post('/api/staking/stakes', validate(schemas.stakingCreate), async (req, res) => {
     try {
-      if (!req.session.userinfo) return res.status(401).json({ error: 'Unauthorized' });
+      if (!authz.hasUserSession(req)) return res.status(401).json({ error: 'Unauthorized' });
 
-      const userId = req.session.userinfo.id;
+      const userId = authz.getSessionUser(req).id;
       const { planId, amount } = req.body;
       const numericAmount = parseFloat(amount);
 
@@ -396,9 +398,9 @@ module.exports.load = function (app, db) {
   // Claim a stake
   app.post('/api/staking/stakes/:stakeId/claim', async (req, res) => {
     try {
-      if (!req.session.userinfo) return res.status(401).json({ error: 'Unauthorized' });
+      if (!authz.hasUserSession(req)) return res.status(401).json({ error: 'Unauthorized' });
 
-      const userId = req.session.userinfo.id;
+      const userId = authz.getSessionUser(req).id;
       const { stakeId } = req.params;
 
       const result = await stakingManager.claimStake(userId, stakeId);
@@ -420,9 +422,9 @@ module.exports.load = function (app, db) {
   // Get staking transaction history
   app.get('/api/staking/history', async (req, res) => {
     try {
-      if (!req.session.userinfo) return res.status(401).json({ error: 'Unauthorized' });
+      if (!authz.hasUserSession(req)) return res.status(401).json({ error: 'Unauthorized' });
 
-      const userId = req.session.userinfo.id;
+      const userId = authz.getSessionUser(req).id;
       const transactions = await db.transaction.findMany({
         where: {
           userId,
@@ -492,7 +494,7 @@ module.exports.load = function (app, db) {
   // Get active staking users (admin only)
   app.get('/api/admin/staking/active-users', async (req, res) => {
     try {
-      if (!req.session.userinfo || !req.session.pterodactyl || req.session.pterodactyl.root_admin !== true) {
+      if (!authz.hasUserSession(req) || !authz.hasPterodactylSession(req) || !await authz.getAdminStatus(req)) {
         return res.status(403).json({ error: 'Forbidden' });
       }
 

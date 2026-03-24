@@ -3,6 +3,7 @@ const axios = require('axios');
 const loadConfig = require("../handlers/config.js");
 const settings = loadConfig("./config.toml");
 const { validate, schemas } = require('../handlers/validate');
+const createAuthz = require('../handlers/authz');
 
 const HeliactylModule = {
   "name": "Passkeys",
@@ -43,13 +44,7 @@ const {
 // Setup routes for Passkey authentication
 module.exports.HeliactylModule = HeliactylModule;
 module.exports.load = async function (app, db) {
-  // Middleware to check if user is authenticated
-  const isAuthenticated = (req, res, next) => {
-    if (req.session && req.session.userinfo) {
-      return next();
-    }
-    res.status(401).json({ error: 'Authentication required' });
-  };
+  const authz = createAuthz(db);
 
   // Constants
   const rpName = 'Heliactyl';
@@ -57,9 +52,9 @@ module.exports.load = async function (app, db) {
   const expectedOrigin = settings.website.domain;
 
   // Get passkey status
-  app.get('/api/passkey/status', isAuthenticated, async (req, res) => {
+  app.get('/api/passkey/status', authz.requireSession, async (req, res) => {
     try {
-      const userId = req.session.userinfo.id;
+      const userId = authz.getSessionUser(req).id;
       const user = await db.user.findUnique({
         where: { id: userId },
         select: { passkeysEnabled: true }
@@ -80,9 +75,10 @@ module.exports.load = async function (app, db) {
   });
 
   // Initialize passkey registration
-  app.post('/api/passkey/registration-options', isAuthenticated, validate(schemas.passkeyRegistration), async (req, res) => {
+  app.post('/api/passkey/registration-options', authz.requireSession, validate(schemas.passkeyRegistration), async (req, res) => {
     try {
-      const userId = req.session.userinfo.id;
+      const sessionUser = authz.getSessionUser(req);
+      const userId = sessionUser.id;
       const { name } = req.body;
 
       // Get existing passkeys for this user
@@ -105,8 +101,8 @@ module.exports.load = async function (app, db) {
         rpName,
         rpID,
         userID: userIdBuffer,
-        userName: req.session.userinfo.username,
-        userDisplayName: req.session.userinfo.global_name || req.session.userinfo.username,
+        userName: sessionUser.username,
+        userDisplayName: sessionUser.global_name || sessionUser.username,
         excludeCredentials,
         authenticatorSelection: {
           residentKey: 'preferred',
@@ -130,7 +126,7 @@ module.exports.load = async function (app, db) {
   });
 
   // Verify passkey registration
-  app.post('/api/passkey/register', isAuthenticated, validate(schemas.passkeyRegister), async (req, res) => {
+  app.post('/api/passkey/register', authz.requireSession, validate(schemas.passkeyRegister), async (req, res) => {
     try {
       // Verify we have a registration in progress
       if (!req.session.passkeyRegistrationChallenge) {
@@ -140,7 +136,7 @@ module.exports.load = async function (app, db) {
       const { challenge, name, userId } = req.session.passkeyRegistrationChallenge;
 
       // Make sure we're using the same userId from the registration process
-      const registrationUserId = userId || req.session.userinfo.id;
+      const registrationUserId = userId || authz.getSessionUser(req).id;
 
       // Update verification parameters to match our registration options
       const verification = await verifyRegistrationResponse({
@@ -206,9 +202,9 @@ module.exports.load = async function (app, db) {
   });
 
   // Remove a passkey
-  app.delete('/api/passkey/:id', isAuthenticated, async (req, res) => {
+  app.delete('/api/passkey/:id', authz.requireSession, async (req, res) => {
     try {
-      const userId = req.session.userinfo.id;
+      const userId = authz.getSessionUser(req).id;
       const passkeyId = req.params.id;
 
       const passkey = await db.passkey.findUnique({

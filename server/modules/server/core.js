@@ -57,7 +57,7 @@ const isAuthenticated = (req, res, next) => {
 // Fixed enhancedOwnsServer middleware with fresh Pterodactyl data
 const ownsServer = async (req, res, next) => {
   try {
-    const serverId = req.params.id || req.params.serverId || req.params.instanceId;
+    const serverId = req.params.id || req.params.serverId || req.params.instanceId || req.query.id;
     if (!serverId) {
       return res.status(400).json({ error: 'No server ID provided' });
     }

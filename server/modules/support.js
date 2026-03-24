@@ -4,6 +4,7 @@ const settings = loadConfig("./config.toml");
 const axios = require("axios");
 const { paginate, getPaginationParams } = require("../handlers/pagination");
 const { validate, schemas } = require("../handlers/validate");
+const createAuthz = require('../handlers/authz');
 
 // Pterodactyl API helper
 const pteroApi = axios.create({
@@ -39,28 +40,11 @@ const HeliactylModule = {
 /* Module */
 module.exports.HeliactylModule = HeliactylModule;
 module.exports.load = async function (app, db) {
+  const authz = createAuthz(db);
+
   // Middleware to check admin status
   async function checkAdmin(req, res, settings, db) {
-    if (!req.session.userinfo) return false;
-
-    try {
-      const user = await db.user.findUnique({
-        where: { id: req.session.userinfo.id },
-        select: { pterodactylId: true }
-      });
-
-      if (!user || !user.pterodactylId) return false;
-
-      const response = await pteroApi.get(
-        `/api/application/users/${user.pterodactylId}?include=servers`
-      );
-
-      return response.data.attributes.root_admin === true;
-    } catch (error) {
-      if (error.response?.status === 404) return false;
-      console.error("Error checking admin status:", error);
-      return false;
-    }
+    return authz.getAdminStatus(req);
   }
 
   // Get ticket statistics (admin only)
@@ -100,13 +84,14 @@ module.exports.load = async function (app, db) {
   });
 
   app.post("/api/notifications/:id/read", async (req, res) => {
-    if (!req.session.userinfo) return res.status(401).json({ error: "Unauthorized" });
+    if (!authz.hasUserSession(req)) return res.status(401).json({ error: "Unauthorized" });
+    const sessionUser = authz.getSessionUser(req);
 
     try {
       await db.notification.updateMany({
         where: {
           id: req.params.id,
-          userId: req.session.userinfo.id
+          userId: sessionUser.id
         },
         data: {
           read: true
@@ -122,11 +107,12 @@ module.exports.load = async function (app, db) {
 
   // Get ticket count for user
   app.get("/api/tickets/count", async (req, res) => {
-    if (!req.session.userinfo) return res.status(401).json({ error: "Unauthorized" });
+    if (!authz.hasUserSession(req)) return res.status(401).json({ error: "Unauthorized" });
+    const sessionUser = authz.getSessionUser(req);
 
     try {
       const userTickets = await db.ticket.findMany({
-        where: { userId: req.session.userinfo.id }
+        where: { userId: sessionUser.id }
       });
 
       const counts = {
@@ -249,14 +235,15 @@ module.exports.load = async function (app, db) {
 
   // Create a new ticket
   app.post("/api/tickets", validate(schemas.ticketCreate), async (req, res) => {
-    if (!req.session.userinfo) return res.status(401).json({ error: "Unauthorized" });
+    if (!authz.hasUserSession(req)) return res.status(401).json({ error: "Unauthorized" });
+    const sessionUser = authz.getSessionUser(req);
 
     try {
       const { subject, description, priority, category } = req.body;
 
       const ticket = await db.ticket.create({
         data: {
-          userId: req.session.userinfo.id,
+          userId: sessionUser.id,
           subject: subject,
           description: description,
           priority: priority,
@@ -269,7 +256,7 @@ module.exports.load = async function (app, db) {
       const message = await db.ticketMessage.create({
         data: {
           ticketId: ticket.id,
-          userId: req.session.userinfo.id,
+          userId: sessionUser.id,
           content: description,
           isStaff: false
         }
@@ -280,7 +267,7 @@ module.exports.load = async function (app, db) {
       // Create user notification
       await db.notification.create({
         data: {
-          userId: req.session.userinfo.id,
+          userId: sessionUser.id,
           action: 'ticket_created',
           name: `Ticket #${ticket.id.slice(0, 8)} has been created`
         }
@@ -333,12 +320,13 @@ module.exports.load = async function (app, db) {
 
   // Get user's tickets with pagination
   app.get("/api/tickets", async (req, res) => {
-    if (!req.session.userinfo) return res.status(401).json({ error: "Unauthorized" });
+    if (!authz.hasUserSession(req)) return res.status(401).json({ error: "Unauthorized" });
+    const sessionUser = authz.getSessionUser(req);
 
     try {
       const { page, perPage } = getPaginationParams(req.query);
       const userTickets = await db.ticket.findMany({
-        where: { userId: req.session.userinfo.id },
+        where: { userId: sessionUser.id },
         include: { messages: true },
         orderBy: { createdAt: 'desc' }
       });
@@ -354,7 +342,8 @@ module.exports.load = async function (app, db) {
 
   // Get specific ticket
   app.get("/api/tickets/:id", async (req, res) => {
-    if (!req.session.userinfo) return res.status(401).json({ error: "Unauthorized" });
+    if (!authz.hasUserSession(req)) return res.status(401).json({ error: "Unauthorized" });
+    const sessionUser = authz.getSessionUser(req);
 
     try {
       const ticket = await db.ticket.findUnique({
@@ -368,7 +357,7 @@ module.exports.load = async function (app, db) {
 
       // Check if user owns ticket or is admin
       const isAdmin = await checkAdmin(req, res, settings, db);
-      if (ticket.userId !== req.session.userinfo.id && !isAdmin) {
+      if (ticket.userId !== sessionUser.id && !isAdmin) {
         return res.status(403).json({ error: "Unauthorized" });
       }
 
@@ -381,7 +370,8 @@ module.exports.load = async function (app, db) {
 
   // Add message to ticket
   app.post("/api/tickets/:id/messages", validate(schemas.ticketMessage), async (req, res) => {
-    if (!req.session.userinfo) return res.status(401).json({ error: "Unauthorized" });
+    if (!authz.hasUserSession(req)) return res.status(401).json({ error: "Unauthorized" });
+    const sessionUser = authz.getSessionUser(req);
 
     try {
       const { content } = req.body;
@@ -397,14 +387,14 @@ module.exports.load = async function (app, db) {
       const isAdmin = await checkAdmin(req, res, settings, db);
 
       // Check if user owns ticket or is admin
-      if (ticket.userId !== req.session.userinfo.id && !isAdmin) {
+      if (ticket.userId !== sessionUser.id && !isAdmin) {
         return res.status(403).json({ error: "Unauthorized" });
       }
 
       const message = await db.ticketMessage.create({
         data: {
           ticketId: ticket.id,
-          userId: req.session.userinfo.id,
+          userId: sessionUser.id,
           content: content,
           isStaff: isAdmin
         }
@@ -453,7 +443,8 @@ module.exports.load = async function (app, db) {
 
   // Update ticket status (open/closed)
   app.patch("/api/tickets/:id/status", validate(schemas.ticketStatus), async (req, res) => {
-    if (!req.session.userinfo) return res.status(401).json({ error: "Unauthorized" });
+    if (!authz.hasUserSession(req)) return res.status(401).json({ error: "Unauthorized" });
+    const sessionUser = authz.getSessionUser(req);
 
     try {
       const { status } = req.body;
@@ -469,7 +460,7 @@ module.exports.load = async function (app, db) {
       const isAdmin = await checkAdmin(req, res, settings, db);
 
       // Check if user owns ticket or is admin
-      if (ticket.userId !== req.session.userinfo.id && !isAdmin) {
+      if (ticket.userId !== sessionUser.id && !isAdmin) {
         return res.status(403).json({ error: "Unauthorized" });
       }
 
@@ -482,7 +473,7 @@ module.exports.load = async function (app, db) {
       await db.ticketMessage.create({
         data: {
           ticketId: ticket.id,
-          userId: req.session.userinfo.id,
+          userId: sessionUser.id,
           content: `Ticket ${status} by ${isAdmin ? 'staff' : 'user'}`,
           isSystem: true
         }
@@ -531,6 +522,8 @@ module.exports.load = async function (app, db) {
       return res.status(403).json({ error: "Unauthorized" });
     }
 
+    const sessionUser = authz.getSessionUser(req);
+
     try {
       const { priority } = req.body;
 
@@ -551,7 +544,7 @@ module.exports.load = async function (app, db) {
       await db.ticketMessage.create({
         data: {
           ticketId: ticket.id,
-          userId: req.session.userinfo.id,
+          userId: sessionUser.id,
           content: `Ticket priority changed to ${priority}`,
           isSystem: true
         }

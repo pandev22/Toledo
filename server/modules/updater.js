@@ -9,6 +9,7 @@ const execAsync = promisify(exec);
 const axios = require("axios");
 const loadConfig = require("../handlers/config.js");
 const createLogger = require("../handlers/console.js");
+const createAuthz = require('../handlers/authz');
 
 const settings = loadConfig("./config.toml");
 const logger = createLogger();
@@ -24,33 +25,8 @@ const pteroApi = axios.create({
 
 // Check admin status utility function
 async function checkAdminStatus(req, res, db) {
-  if (!req.session.pterodactyl) return false;
-
-  const cacheKey = 'adminStatusCache';
-  const cacheExpiry = 5 * 60 * 1000;
-
-  if (req.session[cacheKey] && req.session[cacheKey].timestamp) {
-    const age = Date.now() - req.session[cacheKey].timestamp;
-    if (age < cacheExpiry) {
-      return req.session[cacheKey].isAdmin;
-    }
-  }
-
-  try {
-    const pterodactylId = (await db.user.findUnique({ where: { id: req.session.userinfo.id }, select: { pterodactylId: true } }))?.pterodactylId;
-    const response = await pteroApi.get(`/api/application/users/${pterodactylId}?include=servers`);
-    const isAdmin = response.data.attributes.root_admin === true;
-
-    req.session[cacheKey] = {
-      isAdmin,
-      timestamp: Date.now()
-    };
-
-    return isAdmin;
-  } catch (error) {
-    console.error("Error checking admin status:", error.message);
-    return false;
-  }
+  const authz = createAuthz(db);
+  return authz.getAdminStatus(req);
 }
 
 

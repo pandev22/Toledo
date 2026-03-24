@@ -3,6 +3,7 @@ const fs = require("fs");
 const loadConfig = require("../handlers/config.js");
 const settings = loadConfig("./config.toml");
 const { validate, schemas } = require('../handlers/validate');
+const createAuthz = require('../handlers/authz');
 
 const HeliactylModule = {
   "name": "Daily Rewards",
@@ -568,15 +569,16 @@ class DailyRewardsManager {
 
 module.exports.load = function (app, db) {
   const dailyRewardsManager = new DailyRewardsManager(db);
+  const authz = createAuthz(db);
 
   // ==== API ENDPOINTS ====
 
   // Get claim status
   app.get('/api/daily-rewards/status', async (req, res) => {
     try {
-      if (!req.session.userinfo) return res.status(401).json({ error: 'Unauthorized' });
+      if (!authz.hasUserSession(req)) return res.status(401).json({ error: 'Unauthorized' });
 
-      const userId = req.session.userinfo.id;
+      const userId = authz.getSessionUser(req).id;
       const status = await dailyRewardsManager.getClaimStatus(userId);
 
       res.json(status);
@@ -589,9 +591,9 @@ module.exports.load = function (app, db) {
   // Claim daily reward
   app.post('/api/daily-rewards/claim', async (req, res) => {
     try {
-      if (!req.session.userinfo) return res.status(401).json({ error: 'Unauthorized' });
+      if (!authz.hasUserSession(req)) return res.status(401).json({ error: 'Unauthorized' });
 
-      const userId = req.session.userinfo.id;
+      const userId = authz.getSessionUser(req).id;
       const result = await dailyRewardsManager.claimDailyReward(userId);
 
       res.json({
@@ -610,10 +612,10 @@ module.exports.load = function (app, db) {
   // Purchase streak protection
   app.post('/api/daily-rewards/protection', validate(schemas.dailyProtection), async (req, res) => {
     try {
-      if (!req.session.userinfo) return res.status(401).json({ error: 'Unauthorized' });
+      if (!authz.hasUserSession(req)) return res.status(401).json({ error: 'Unauthorized' });
 
       const { level } = req.body;
-      const userId = req.session.userinfo.id;
+      const userId = authz.getSessionUser(req).id;
       const result = await dailyRewardsManager.purchaseStreakProtection(userId, level);
 
       res.json({
@@ -645,9 +647,9 @@ module.exports.load = function (app, db) {
   // Get claim history
   app.get('/api/daily-rewards/history', async (req, res) => {
     try {
-      if (!req.session.userinfo) return res.status(401).json({ error: 'Unauthorized' });
+      if (!authz.hasUserSession(req)) return res.status(401).json({ error: 'Unauthorized' });
 
-      const userId = req.session.userinfo.id;
+      const userId = authz.getSessionUser(req).id;
       const limit = req.query.limit ? parseInt(req.query.limit) : 10;
 
       const history = await dailyRewardsManager.getClaimHistory(userId, limit);

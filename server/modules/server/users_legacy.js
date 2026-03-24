@@ -5,6 +5,7 @@
 const express = require("express");
 const { isAuthenticated } = require("./core.js");
 const { updateSubuserInfo } = require("./users.js");
+const createAuthz = require('../../handlers/authz');
 
 /* --------------------------------------------- */
 /* Heliactyl Next Module                                  */
@@ -32,12 +33,14 @@ const HeliactylModule = {
 module.exports.HeliactylModule = HeliactylModule;
 module.exports.load = async function (app, db) {
   const router = express.Router();
+  const authz = createAuthz(db);
 
   // GET /api/subuser-servers - List servers where user is a subuser
   router.get('/subuser-servers', isAuthenticated, async (req, res) => {
     try {
+      const sessionUser = authz.getSessionUser(req);
       const results = await db.subuserServer.findMany({
-        where: { userId: req.session.userinfo.id }
+        where: { userId: sessionUser.id }
       });
 
       const allServers = results.map(s => ({
@@ -56,9 +59,11 @@ module.exports.load = async function (app, db) {
   // POST /api/sync-user-servers - Sync user's servers and subuser permissions
   router.post('/subuser-servers-sync', isAuthenticated, async (req, res) => {
     try {
-      const pteroUsername = req.session.pterodactyl.username;
-      const pteroId = req.session.pterodactyl.id;
-      const userId = req.session.userinfo.id;
+      const sessionUser = authz.getSessionUser(req);
+      const pteroUser = authz.getPterodactylUser(req);
+      const pteroUsername = pteroUser.username;
+      const pteroId = pteroUser.id;
+      const userId = sessionUser.id;
 
       // Update user mappings in User table
       await db.user.update({
@@ -67,7 +72,7 @@ module.exports.load = async function (app, db) {
       });
 
       // Sync owned servers
-      const ownedServers = req.session.pterodactyl.relationships.servers.data;
+      const ownedServers = pteroUser.relationships.servers.data;
       for (const server of ownedServers) {
         await updateSubuserInfo(server.attributes.identifier, userId);
       }

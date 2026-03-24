@@ -6,6 +6,7 @@ const { Client, GatewayIntentBits, Partials } = require('discord.js');
 const loadConfig = require("../handlers/config.js");
 const settings = loadConfig("./config.toml");
 const log = require("../handlers/log.js");
+const createAuthz = require('../handlers/authz');
 
 const HeliactylModule = {
   "name": "Discord OAuth2",
@@ -186,6 +187,8 @@ client.login(DISCORD_BOT_TOKEN).catch((error) => {
 // Module export
 module.exports.HeliactylModule = HeliactylModule;
 module.exports.load = async function (app, db) {
+  const authz = createAuthz(db);
+
   // OAuth login endpoint
   app.get('/auth/discord/login', (req, res) => {
     const state = crypto.randomUUID();
@@ -367,11 +370,11 @@ module.exports.load = async function (app, db) {
 
   // Token refresh endpoint
   app.post('/auth/discord/refresh', async (req, res) => {
-    if (!req.session.userinfo) {
+    if (!authz.hasUserSession(req)) {
       return res.status(401).json({ error: 'Not authenticated' });
     }
 
-    const userId = req.session.userinfo.id;
+    const userId = authz.getSessionUser(req).id;
     const user = await db.user.findUnique({ where: { id: userId } });
 
     if (!user?.discordRefreshToken) {
