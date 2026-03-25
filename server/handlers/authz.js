@@ -29,6 +29,109 @@ function createAuthz(db) {
     return Boolean(getPterodactylUser(req));
   }
 
+  async function getFreshSessionUserRecord(req) {
+    const sessionUser = getSessionUser(req);
+    if (!sessionUser?.id) {
+      return null;
+    }
+
+    return db.user.findUnique({
+      where: { id: sessionUser.id },
+      select: {
+        id: true,
+        username: true,
+        email: true,
+        isBanned: true,
+        banReason: true,
+        bannedAt: true,
+        bannedByUserId: true,
+        bannedByUsername: true,
+        twoFactorEnabled: true,
+        pterodactylId: true,
+      },
+    });
+  }
+
+  function isUserBanned(user) {
+    return user?.isBanned === true;
+  }
+
+  function buildBanPayload(user) {
+    if (!user) {
+      return null;
+    }
+
+    return {
+      reason: user.banReason || 'No reason provided.',
+      bannedAt: user.bannedAt || null,
+      staff: {
+        id: user.bannedByUserId || null,
+        username: user.bannedByUsername || 'Unknown staff member',
+      },
+    };
+  }
+
+  function isBanAllowedRequest(req) {
+    const requestPath = req.path || '/';
+
+    if (
+      requestPath === '/' ||
+      requestPath === '/website' ||
+      requestPath === '/auth' ||
+      requestPath === '/banned' ||
+      requestPath === '/favicon.ico' ||
+      requestPath === '/api/user/logout' ||
+      requestPath === '/api/v5/state' ||
+      requestPath === '/api/v5/settings'
+    ) {
+      return true;
+    }
+
+    if (requestPath.startsWith('/assets/')) {
+      return true;
+    }
+
+    if (requestPath.startsWith('/auth/')) {
+      return true;
+    }
+
+    return false;
+  }
+
+  function denyBannedRequest(req, res, user, options = {}) {
+    const payload = buildBanPayload(user);
+    const shouldForceJson = options.forceJson === true;
+    const isApiRequest = req.path.startsWith('/api/');
+
+    if (shouldForceJson || isApiRequest) {
+      return res.status(403).json({
+        code: 'USER_BANNED',
+        error: 'Your account is banned',
+        redirectTo: '/banned',
+        ban: payload,
+      });
+    }
+
+    return res.redirect('/banned');
+  }
+
+  async function enforceBanPolicy(req, res, next) {
+    if (!hasUserSession(req) || isBanAllowedRequest(req)) {
+      return next();
+    }
+
+    try {
+      const user = await getFreshSessionUserRecord(req);
+      if (!isUserBanned(user)) {
+        return next();
+      }
+
+      return denyBannedRequest(req, res, user);
+    } catch (error) {
+      return res.status(500).json({ error: 'Failed to verify account access' });
+    }
+  }
+
   function requireSession(req, res, next) {
     if (!hasUserSession(req)) {
       return res.status(401).json({ error: 'Not authenticated' });
@@ -101,8 +204,14 @@ function createAuthz(db) {
   return {
     getSessionUser,
     getPterodactylUser,
+    getFreshSessionUserRecord,
     hasUserSession,
     hasPterodactylSession,
+    isUserBanned,
+    buildBanPayload,
+    isBanAllowedRequest,
+    denyBannedRequest,
+    enforceBanPolicy,
     requireSession,
     requirePterodactylSession,
     getAdminStatus,

@@ -81,6 +81,11 @@ const AuthPage = () => {
         if (response.ok) {
           const data = await response.json();
 
+          if (data.banned) {
+            navigate('/banned', { replace: true });
+            return;
+          }
+
           // If 2FA is pending, redirect to 2FA page
           if (data.twoFactorPending) {
             navigate('/auth/2fa', { replace: true });
@@ -235,9 +240,15 @@ const AuthPage = () => {
         body: JSON.stringify(authResponse)
       });
 
+      const verificationData = await verificationResponse.json();
+
       if (!verificationResponse.ok) {
-        const errorData = await verificationResponse.json();
-        throw new Error(errorData.error || 'Failed to verify passkey');
+        if (verificationData.code === 'USER_BANNED') {
+          navigate('/banned', { replace: true });
+          return;
+        }
+
+        throw new Error(verificationData.error || 'Failed to verify passkey');
       }
 
       // Successfully authenticated

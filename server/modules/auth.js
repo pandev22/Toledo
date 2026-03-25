@@ -135,6 +135,50 @@ module.exports.HeliactylModule = HeliactylModule;
 module.exports.load = async function (app, db) {
   const authz = createAuthz(db);
 
+  const setSessionUser = (req, user) => {
+    req.session.userinfo = {
+      id: user.id,
+      username: user.username,
+      email: user.email,
+      global_name: user.username,
+    };
+  };
+
+  const getBanAwareUser = async (userId) => {
+    return db.user.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        username: true,
+        email: true,
+        pterodactylId: true,
+        isBanned: true,
+        banReason: true,
+        bannedAt: true,
+        bannedByUserId: true,
+        bannedByUsername: true,
+      },
+    });
+  };
+
+  const getBanAwareUserByEmail = async (email) => {
+    return db.user.findUnique({
+      where: { email },
+      select: {
+        id: true,
+        username: true,
+        email: true,
+        password: true,
+        pterodactylId: true,
+        isBanned: true,
+        banReason: true,
+        bannedAt: true,
+        bannedByUserId: true,
+        bannedByUsername: true,
+      },
+    });
+  };
+
   const sendEmail = async (to, subject, html) => {
     const response = await axios.post('https://api.resend.com/emails', {
       from: settings.api.client.resend.from,
@@ -262,7 +306,7 @@ module.exports.load = async function (app, db) {
   app.post("/auth/login", loginRateLimit, validate(schemas.authLogin), async (req, res) => {
     const { email, password, remember } = req.body;
 
-    const user = await db.user.findUnique({ where: { email } });
+    const user = await getBanAwareUserByEmail(email);
     if (!user) {
       return res.status(401).json({ error: "Invalid email or password" });
     }
@@ -273,12 +317,11 @@ module.exports.load = async function (app, db) {
     }
 
     // Create session
-    req.session.userinfo = {
-      id: user.id,
-      username: user.username,
-      email: user.email,
-      global_name: user.username
-    };
+    setSessionUser(req, user);
+
+    if (authz.isUserBanned(user)) {
+      return authz.denyBannedRequest(req, res, user, { forceJson: true });
+    }
 
     try {
       // Try to fetch existing Pterodactyl user info
@@ -491,19 +534,18 @@ module.exports.load = async function (app, db) {
       return res.status(400).json({ error: "Invalid or expired token" });
     }
 
-    const user = await db.user.findUnique({ where: { id: magicInfo.userId } });
+    const user = await getBanAwareUser(magicInfo.userId);
 
     if (!user) {
       return res.status(404).json({ error: "User not found" });
     }
 
     // Create session
-    req.session.userinfo = {
-      id: user.id,
-      username: user.username,
-      email: user.email,
-      global_name: user.username
-    };
+    setSessionUser(req, user);
+
+    if (authz.isUserBanned(user)) {
+      return authz.denyBannedRequest(req, res, user);
+    }
 
     // Fetch Pterodactyl user info
     let cacheaccount;

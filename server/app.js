@@ -11,6 +11,7 @@ const chalk = require('./handlers/colors');
 
 const createLogger = require("./handlers/console.js");
 const loadConfig = require("./handlers/config");
+const createAuthz = require("./handlers/authz");
 const db = require("./db.js");
 const ModuleLoader = require("./handlers/modules.js");
 
@@ -75,6 +76,9 @@ app.use((req, res, next) => {
   }
   next();
 });
+
+const authz = createAuthz(db);
+app.use(authz.enforceBanPolicy);
 
 const moduleExports = { app, db, VERSION, PLATFORM_CODENAME, API_LEVEL };
 module.exports = moduleExports;

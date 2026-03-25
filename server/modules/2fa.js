@@ -308,6 +308,11 @@ module.exports.load = async function (app, db) {
           global_name: user.username
         };
 
+        const banRecord = await authz.getFreshSessionUserRecord(req);
+        if (authz.isUserBanned(banRecord)) {
+          return authz.denyBannedRequest(req, res, banRecord, { forceJson: true });
+        }
+
         await db.notification.create({ data: { userId, action: "security:2fa", name: "Logged in using backup code" } });
 
         return res.json({ success: true });
@@ -336,6 +341,11 @@ module.exports.load = async function (app, db) {
         email: user.email,
         global_name: user.username
       };
+
+      const banRecord = await authz.getFreshSessionUserRecord(req);
+      if (authz.isUserBanned(banRecord)) {
+        return authz.denyBannedRequest(req, res, banRecord, { forceJson: true });
+      }
 
       // Fetch Pterodactyl data
       const pteroId = user.pterodactylId;

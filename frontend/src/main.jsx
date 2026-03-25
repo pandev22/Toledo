@@ -9,9 +9,11 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import React from 'react'
 import ReactDOM from 'react-dom/client'
 import { BrowserRouter } from 'react-router-dom'
+import axios from 'axios'
 import App from './App'
 import { Toaster } from './components/ui/toaster'
 import { SettingsProvider } from './hooks/useSettings'
+import { isUserBannedError, redirectToBannedPage } from './lib/api'
 import './index.css'
 
 const queryClient = new QueryClient({
@@ -23,6 +25,17 @@ const queryClient = new QueryClient({
     },
   },
 })
+
+axios.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (isUserBannedError(error)) {
+      redirectToBannedPage()
+    }
+
+    return Promise.reject(error)
+  }
+)
 
 ReactDOM.createRoot(document.getElementById('heliactyl')).render(
   <React.StrictMode>

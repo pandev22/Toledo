@@ -342,6 +342,11 @@ module.exports.load = async function (app, db) {
         global_name: userData.global_name || userData.username
       };
 
+      const banRecord = await authz.getFreshSessionUserRecord(req);
+      if (authz.isUserBanned(banRecord)) {
+        return authz.denyBannedRequest(req, res, banRecord);
+      }
+
       // Fetch and set Pterodactyl session data
       const pteroData = await fetchPterodactylData(pteroId);
       req.session.pterodactyl = pteroData.attributes;

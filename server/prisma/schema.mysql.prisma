@@ -29,6 +29,11 @@ model User {
   discordAccessToken  String?  @db.LongText
   discordRefreshToken String?  @db.LongText
   passkeysEnabled     Boolean  @default(false)
+  isBanned            Boolean  @default(false)
+  banReason           String?  @db.LongText
+  bannedAt            DateTime?
+  bannedByUserId      String?
+  bannedByUsername    String?  @db.Text
   coins               Int      @default(0)
   creditUsd           Float    @default(0)
   packageName         String   @default("default")
