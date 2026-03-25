@@ -14,7 +14,7 @@ const getPteroUser = require('../../handlers/getPteroUser');
 const NodeCache = require("node-cache");
 const createAuthz = require('../../handlers/authz');
 const serverCache = new NodeCache({ stdTTL: 60 });
-let authz;
+let authz = null;
 
 const workflowsFilePath = path.join(__dirname, "../../storage/workflows.json");
 
@@ -351,6 +351,7 @@ module.exports.load = async function (app, _db) {
 
 module.exports = {
   HeliactylModule,
+  load: module.exports.load,
   isAuthenticated,
   ownsServer,
   withServerWebSocket,
@@ -361,3 +362,4 @@ module.exports = {
   API_KEY,
   ADMIN_KEY
 };
+
