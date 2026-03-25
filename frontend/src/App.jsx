@@ -25,6 +25,7 @@ import Package from './pages/server/Package';
 import Logs from './pages/server/Logs';
 
 import Website from './pages/Website';
+import Banned from './pages/Banned';
 
 import Dashboard from './pages/Dashboard';
 import ServersPage from './pages/Servers';
@@ -203,6 +204,11 @@ const ProtectedRoute = ({ children }) => {
         }
 
         const data = await response.json();
+        if (data.banned) {
+          navigate('/banned', { replace: true });
+          return;
+        }
+
         if (data.twoFactorPending) {
           setRequires2FA(true);
           navigate('/auth/2fa', {
@@ -277,6 +283,7 @@ export default function App() {
           {/* Auth routes */}
           <Route path="/auth" element={<Auth />} />
           <Route path="/auth/2fa" element={<TwoFactorVerification />} />
+          <Route path="/banned" element={<Banned />} />
 
           {/* Protected routes with MainLayout */}
           <Route

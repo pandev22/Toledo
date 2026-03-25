@@ -104,6 +104,41 @@ module.exports.load = async function (app, db) {
   let configNeedsReboot = false;
   const authz = createAuthz(db);
   const checkAdmin = (req) => authz.getAdminStatus(req);
+  const banUserSelect = {
+    id: true,
+    username: true,
+    email: true,
+    pterodactylId: true,
+    isBanned: true,
+    banReason: true,
+    bannedAt: true,
+    bannedByUserId: true,
+    bannedByUsername: true,
+  };
+
+  const serializeBanState = (user) => ({
+    isBanned: user?.isBanned === true,
+    reason: user?.banReason || null,
+    bannedAt: user?.bannedAt || null,
+    bannedByUserId: user?.bannedByUserId || null,
+    bannedByUsername: user?.bannedByUsername || null,
+  });
+
+  const resolveLocalUser = async (userIdParam) => {
+    const parsedPterodactylId = Number.parseInt(userIdParam, 10);
+
+    return db.user.findFirst({
+      where: Number.isNaN(parsedPterodactylId)
+        ? { id: userIdParam }
+        : {
+            OR: [
+              { id: userIdParam },
+              { pterodactylId: parsedPterodactylId },
+            ],
+          },
+      select: banUserSelect,
+    });
+  };
 
   // New /api/admin endpoint
   app.get("/api/admin", async (req, res) => {
@@ -1053,6 +1088,175 @@ module.exports.load = async function (app, db) {
       res.json(results);
     } catch (error) {
       console.error("Error fetching bulk user resources:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  app.get("/api/users/bulk/ban-status", async (req, res) => {
+    if (!await authz.getAdminStatus(req)) {
+      return res.status(403).json({ error: "Unauthorized" });
+    }
+
+    try {
+      const ids = req.query.ids;
+      if (!ids) {
+        return res.status(400).json({ error: "Missing ids parameter" });
+      }
+
+      const pterodactylIds = ids
+        .split(',')
+        .map((id) => id.trim())
+        .filter((id) => id)
+        .map((id) => Number.parseInt(id, 10))
+        .filter((id) => !Number.isNaN(id));
+
+      if (pterodactylIds.length === 0) {
+        return res.status(400).json({ error: "Invalid ids parameter" });
+      }
+
+      const users = await db.user.findMany({
+        where: { pterodactylId: { in: pterodactylIds } },
+        select: banUserSelect,
+      });
+
+      const results = {};
+      for (const pterodactylId of pterodactylIds) {
+        results[pterodactylId] = serializeBanState(null);
+      }
+
+      for (const user of users) {
+        if (user.pterodactylId != null) {
+          results[user.pterodactylId] = serializeBanState(user);
+        }
+      }
+
+      res.json(results);
+    } catch (error) {
+      console.error("Error fetching bulk ban status:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  app.get("/api/users/:id/ban", async (req, res) => {
+    if (!await authz.getAdminStatus(req)) {
+      return res.status(403).json({ error: "Unauthorized" });
+    }
+
+    try {
+      const user = await resolveLocalUser(req.params.id);
+      if (!user) {
+        return res.status(404).json({ error: "User not found" });
+      }
+
+      res.json({
+        userId: user.id,
+        username: user.username,
+        ...serializeBanState(user),
+      });
+    } catch (error) {
+      console.error("Error fetching user ban state:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  app.post("/api/users/:id/ban", adminWriteRateLimit, validate(schemas.adminBanUser), async (req, res) => {
+    if (!await authz.getAdminStatus(req)) {
+      return res.status(403).json({ error: "Unauthorized" });
+    }
+
+    try {
+      const actor = authz.getSessionUser(req);
+      const user = await resolveLocalUser(req.params.id);
+      if (!user) {
+        return res.status(404).json({ error: "User not found" });
+      }
+
+      if (user.id === actor?.id) {
+        return res.status(400).json({ error: "You cannot ban your own account" });
+      }
+
+      const updatedUser = await db.user.update({
+        where: { id: user.id },
+        data: {
+          isBanned: true,
+          banReason: req.body.reason,
+          bannedAt: new Date(),
+          bannedByUserId: actor?.id || null,
+          bannedByUsername: actor?.username || null,
+        },
+        select: banUserSelect,
+      });
+
+      await db.notification.create({
+        data: {
+          userId: user.id,
+          action: "user:ban",
+          name: `Account banned by ${actor?.username || 'staff'}`,
+        }
+      });
+
+      log(
+        "user banned",
+        `${actor?.username || 'staff'} banned ${updatedUser.username}: ${req.body.reason}`
+      );
+
+      res.json({
+        success: true,
+        userId: updatedUser.id,
+        username: updatedUser.username,
+        ...serializeBanState(updatedUser),
+      });
+    } catch (error) {
+      console.error("Error banning user:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  app.delete("/api/users/:id/ban", adminWriteRateLimit, async (req, res) => {
+    if (!await authz.getAdminStatus(req)) {
+      return res.status(403).json({ error: "Unauthorized" });
+    }
+
+    try {
+      const actor = authz.getSessionUser(req);
+      const user = await resolveLocalUser(req.params.id);
+      if (!user) {
+        return res.status(404).json({ error: "User not found" });
+      }
+
+      const updatedUser = await db.user.update({
+        where: { id: user.id },
+        data: {
+          isBanned: false,
+          banReason: null,
+          bannedAt: null,
+          bannedByUserId: null,
+          bannedByUsername: null,
+        },
+        select: banUserSelect,
+      });
+
+      await db.notification.create({
+        data: {
+          userId: user.id,
+          action: "user:unban",
+          name: `Account unbanned by ${actor?.username || 'staff'}`,
+        }
+      });
+
+      log(
+        "user unbanned",
+        `${actor?.username || 'staff'} unbanned ${updatedUser.username}`
+      );
+
+      res.json({
+        success: true,
+        userId: updatedUser.id,
+        username: updatedUser.username,
+        ...serializeBanState(updatedUser),
+      });
+    } catch (error) {
+      console.error("Error unbanning user:", error);
       res.status(500).json({ error: "Internal server error" });
     }
   });

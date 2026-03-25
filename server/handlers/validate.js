@@ -500,6 +500,13 @@ const schemas = {
     password: z.string().min(8).optional()
   }),
 
+  adminBanUser: z.object({
+    reason: z.string({ required_error: 'Ban reason is required' })
+      .min(3, 'Ban reason must be at least 3 characters')
+      .max(2000, 'Ban reason cannot exceed 2000 characters')
+      .trim()
+  }),
+
   // Node management
   nodeCreate: z.object({
     name: z.string({ required_error: 'Node name is required' }).min(1).max(100).trim(),

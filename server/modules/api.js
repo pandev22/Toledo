@@ -82,15 +82,25 @@ module.exports.load = async function (app, db) {
       // Get 2FA status
       const user = await db.user.findUnique({
         where: { id: userId },
-        select: { twoFactorEnabled: true }
+        select: {
+          twoFactorEnabled: true,
+          isBanned: true,
+          banReason: true,
+          bannedAt: true,
+          bannedByUserId: true,
+          bannedByUsername: true,
+        }
       });
       const twoFactorEnabled = user?.twoFactorEnabled || false;
+      const banned = user?.isBanned === true;
 
       // Return authentication state
       return res.json({
         authenticated: !twoFactorPending,
         twoFactorPending: twoFactorPending,
         twoFactorEnabled: twoFactorEnabled,
+        banned,
+        ban: banned ? authz.buildBanPayload(user) : null,
         admin: await authz.getAdminStatus(req),
         site_name: settings.website.name || "Heliactyl",
         user: {

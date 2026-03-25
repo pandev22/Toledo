@@ -328,6 +328,11 @@ module.exports.load = async function (app, db) {
         global_name: user.username // User model doesn't have global_name, using username
       };
 
+      const banRecord = await authz.getFreshSessionUserRecord(req);
+      if (authz.isUserBanned(banRecord)) {
+        return authz.denyBannedRequest(req, res, banRecord, { forceJson: true });
+      }
+
       // Fetch Pterodactyl data
       const pteroId = user.pterodactylId;
       if (pteroId) {

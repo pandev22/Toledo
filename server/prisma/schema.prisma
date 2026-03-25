@@ -36,6 +36,11 @@ model User {
   discordAccessToken  String?
   discordRefreshToken String?
   passkeysEnabled     Boolean @default(false)
+  isBanned           Boolean  @default(false)
+  banReason          String?
+  bannedAt           DateTime?
+  bannedByUserId     String?
+  bannedByUsername   String?
 
   // Economy
   coins       Int     @default(0)

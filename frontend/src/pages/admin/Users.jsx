@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
 import { Button } from '@/components/ui/button';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
@@ -305,8 +306,10 @@ export default function UsersPage() {
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
+  const [isBanDialogOpen, setIsBanDialogOpen] = useState(false);
   const [selectedUser, setSelectedUser] = useState(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [banReason, setBanReason] = useState('');
 
   // Fetch basic user list only (no coins/resources - those are fetched per-page)
   const { data: users, isLoading: loadingUsers } = useQuery({
@@ -354,16 +357,18 @@ export default function UsersPage() {
       if (currentPageUserIds.length === 0) return {};
 
       const idsParam = currentPageUserIds.join(',');
-      const [coinsRes, resourcesRes] = await Promise.all([
+      const [coinsRes, resourcesRes, banRes] = await Promise.all([
         axios.get(`/api/users/bulk/coins?ids=${idsParam}`),
-        axios.get(`/api/users/bulk/resources?ids=${idsParam}`)
+        axios.get(`/api/users/bulk/resources?ids=${idsParam}`),
+        axios.get(`/api/users/bulk/ban-status?ids=${idsParam}`)
       ]);
 
       const details = {};
       currentPageUserIds.forEach(userId => {
         details[userId] = {
           coins: coinsRes.data[userId] || 0,
-          resources: resourcesRes.data[userId] || { ram: 0, disk: 0, cpu: 0, servers: 0 }
+          resources: resourcesRes.data[userId] || { ram: 0, disk: 0, cpu: 0, servers: 0 },
+          ban: banRes.data[userId] || { isBanned: false, reason: null, bannedAt: null, bannedByUsername: null }
         };
       });
       return details;
@@ -376,9 +381,15 @@ export default function UsersPage() {
     return paginatedUsers.map(user => ({
       ...user,
       coins: userDetails?.[user.attributes.id]?.coins ?? null,
-      resources: userDetails?.[user.attributes.id]?.resources ?? null
+      resources: userDetails?.[user.attributes.id]?.resources ?? null,
+      ban: userDetails?.[user.attributes.id]?.ban ?? { isBanned: false, reason: null, bannedAt: null, bannedByUsername: null }
     }));
   }, [paginatedUsers, userDetails]);
+
+  const invalidateUserQueries = () => {
+    queryClient.invalidateQueries({ queryKey: ['users'] });
+    queryClient.invalidateQueries({ queryKey: ['userDetails'] });
+  };
 
   const handleEditClick = async (user) => {
     setSelectedUser(user);
@@ -441,7 +452,7 @@ export default function UsersPage() {
       ]);
 
       setIsCreateModalOpen(false);
-      queryClient.invalidateQueries('users');
+      invalidateUserQueries();
 
       // Show success message
       toast({
@@ -497,7 +508,7 @@ export default function UsersPage() {
 
       setIsEditModalOpen(false);
       setSelectedUser(null);
-      queryClient.invalidateQueries('users');
+      invalidateUserQueries();
 
       // Show success message
       toast({
@@ -518,7 +529,7 @@ export default function UsersPage() {
       await axios.delete(`/api/users/${selectedUser.attributes.id}`);
       setIsDeleteDialogOpen(false);
       setSelectedUser(null);
-      queryClient.invalidateQueries('users');
+      invalidateUserQueries();
       toast({
         title: "Success",
         description: "User deleted successfully",
@@ -527,6 +538,54 @@ export default function UsersPage() {
     } catch (err) {
       showApiErrorToast(toast, err, 'Failed to delete user');
 
+    }
+  };
+
+  const handleBanClick = (user) => {
+    setSelectedUser(user);
+    setBanReason(user.ban?.reason || '');
+    setIsBanDialogOpen(true);
+  };
+
+  const handleBanUser = async () => {
+    if (!selectedUser) {
+      return;
+    }
+
+    try {
+      setIsSubmitting(true);
+      await axios.post(`/api/users/${selectedUser.attributes.id}/ban`, {
+        reason: banReason,
+      });
+
+      setIsBanDialogOpen(false);
+      setSelectedUser(null);
+      setBanReason('');
+      invalidateUserQueries();
+      toast({
+        title: 'Success',
+        description: 'User banned successfully',
+      });
+    } catch (err) {
+      showApiErrorToast(toast, err, 'Failed to ban user');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleUnbanUser = async (user) => {
+    try {
+      setIsSubmitting(true);
+      await axios.delete(`/api/users/${user.attributes.id}/ban`);
+      invalidateUserQueries();
+      toast({
+        title: 'Success',
+        description: 'User unbanned successfully',
+      });
+    } catch (err) {
+      showApiErrorToast(toast, err, 'Failed to unban user');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -679,9 +738,16 @@ export default function UsersPage() {
                         </div>
                       </TableCell>
                       <TableCell>
-                        <Badge variant={user.attributes.root_admin ? "destructive" : "success"}>
-                          {user.attributes.root_admin ? "Administrator" : "User"}
-                        </Badge>
+                        <div className="space-y-2">
+                          <Badge variant={user.ban?.isBanned ? "destructive" : user.attributes.root_admin ? "destructive" : "success"}>
+                            {user.ban?.isBanned ? "Banned" : user.attributes.root_admin ? "Administrator" : "User"}
+                          </Badge>
+                          {user.ban?.isBanned && (
+                            <div className="max-w-[220px] text-xs text-neutral-500">
+                              By {user.ban?.bannedByUsername || 'Unknown staff'}
+                            </div>
+                          )}
+                        </div>
                       </TableCell>
                       <TableCell>
                         <div className="flex justify-end">
@@ -699,6 +765,17 @@ export default function UsersPage() {
                                 <Edit className="w-4 h-4 mr-2" />
                                 Edit User
                               </DropdownMenuItem>
+                              {user.ban?.isBanned ? (
+                                <DropdownMenuItem onClick={() => handleUnbanUser(user)}>
+                                  <Shield className="w-4 h-4 mr-2 text-emerald-500" />
+                                  Unban User
+                                </DropdownMenuItem>
+                              ) : (
+                                <DropdownMenuItem onClick={() => handleBanClick(user)}>
+                                  <Ban className="w-4 h-4 mr-2 text-amber-500" />
+                                  Ban User
+                                </DropdownMenuItem>
+                              )}
                               <DropdownMenuItem onClick={() => {
                                 setSelectedUser(user);
                                 setIsDeleteDialogOpen(true);
@@ -759,6 +836,51 @@ export default function UsersPage() {
             onSubmit={handleEditUser}
             isSubmitting={isSubmitting}
           />
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isBanDialogOpen} onOpenChange={setIsBanDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Ban User - {selectedUser?.attributes?.username}</DialogTitle>
+            <DialogDescription>
+              This blocks every protected request and redirects the user to the dedicated ban page.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <label htmlFor="ban-reason" className="text-sm font-medium">Ban reason</label>
+              <Textarea
+                id="ban-reason"
+                value={banReason}
+                onChange={(event) => setBanReason(event.target.value)}
+                placeholder="Explain why this account is banned"
+                rows={6}
+              />
+            </div>
+
+            <div className="flex justify-end gap-2">
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setIsBanDialogOpen(false);
+                  setSelectedUser(null);
+                  setBanReason('');
+                }}
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="destructive"
+                onClick={handleBanUser}
+                disabled={isSubmitting || banReason.trim().length < 3}
+              >
+                <Ban className="w-4 h-4 mr-2" />
+                {isSubmitting ? 'Applying ban...' : 'Confirm Ban'}
+              </Button>
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
 
