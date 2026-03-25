@@ -361,7 +361,16 @@ module.exports.load = async function (app, db) {
         return res.status(403).json({ error: "Unauthorized" });
       }
 
-      res.json(formatTicketForDisplay(ticket));
+      const formattedTicket = formatTicketForDisplay(ticket);
+
+      // Add admin-only data if requester is admin
+      if (isAdmin) {
+        const adminData = await getAdminTicketData(ticket.userId, db, pteroApi);
+        formattedTicket.customer = adminData.customer;
+        formattedTicket.ownedServers = adminData.ownedServers;
+      }
+
+      res.json(formattedTicket);
     } catch (error) {
       console.error("Error fetching ticket:", error);
       res.status(500).json({ error: "Internal server error" });
@@ -600,6 +609,7 @@ function formatTicketForDisplay(ticket, includeMessages = true) {
   const displayTicket = {
     id: ticket.id,
     subject: ticket.subject,
+    description: ticket.description,
     status: ticket.status,
     priority: ticket.priority,
     category: ticket.category,
@@ -647,4 +657,160 @@ function getTimeAgo(timestamp) {
   }
 
   return 'just now';
+}
+
+// Helper function to get admin ticket data (customer info and owned servers)
+async function getAdminTicketData(userId, db, pteroApi) {
+  const fallbackCustomer = {
+    id: userId,
+    pterodactylId: null,
+    username: 'Unknown',
+    email: 'unknown@example.com',
+    firstName: null,
+    lastName: null,
+    rootAdmin: false,
+    createdAt: null,
+    coins: 0,
+    packageName: null,
+    packageRAM: 0,
+    packageDisk: 0,
+    packageCpu: 0,
+    packageServers: 0,
+    extraRAM: 0,
+    extraDisk: 0,
+    extraCpu: 0,
+    extraServers: 0,
+    totalRAM: 0,
+    totalDisk: 0,
+    totalCpu: 0,
+    totalServers: 0
+  };
+
+  const fallbackServers = [];
+
+  try {
+    // Fetch user from database (coins, package, extras)
+    const dbUser = await db.user.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        pterodactylId: true,
+        coins: true,
+        packageName: true,
+        extraRam: true,
+        extraDisk: true,
+        extraCpu: true,
+        extraServers: true,
+        createdAt: true
+      }
+    });
+
+    if (!dbUser) {
+      return { customer: fallbackCustomer, ownedServers: fallbackServers };
+    }
+
+    // Get package defaults from settings
+    const defaultPackage = settings.api.client.packages?.default || 'free';
+    const userPackage = settings.api.client.packages?.list?.[dbUser.packageName || defaultPackage] || {};
+    const packageRAM = userPackage.ram || 0;
+    const packageDisk = userPackage.disk || 0;
+    const packageCpu = userPackage.cpu || 0;
+    const packageServers = userPackage.servers || 0;
+
+    let pteroUsername = 'Unknown';
+    let pteroEmail = 'unknown@example.com';
+    let pteroFirstName = null;
+    let pteroLastName = null;
+    let pteroRootAdmin = false;
+    let pteroCreatedAt = dbUser.createdAt;
+
+    // Fetch Pterodactyl panel user info if pterodactylId exists
+    if (dbUser.pterodactylId) {
+      try {
+        const pteroResponse = await pteroApi.get(`/api/application/users/${dbUser.pterodactylId}`);
+        const pteroUser = pteroResponse.data?.attributes;
+        if (pteroUser) {
+          pteroUsername = pteroUser.username || pteroUsername;
+          pteroEmail = pteroUser.email || pteroEmail;
+          pteroFirstName = pteroUser.first_name || null;
+          pteroLastName = pteroUser.last_name || null;
+          pteroRootAdmin = Boolean(pteroUser.root_admin);
+          pteroCreatedAt = pteroUser.created_at || pteroCreatedAt;
+        }
+      } catch (pteroError) {
+        console.warn('Could not fetch Pterodactyl user:', pteroError.message);
+      }
+    }
+
+    // Fetch all servers and filter by this user
+    let ownedServers = [];
+    try {
+      const perPage = 100;
+      const allServers = [];
+      let page = 1;
+
+      while (page <= 100) {
+        const serversResponse = await pteroApi.get(`/api/application/servers?page=${page}&per_page=${perPage}&include=node`);
+        const pageServers = serversResponse.data?.data || [];
+
+        allServers.push(...pageServers);
+
+        if (pageServers.length < perPage) {
+          break;
+        }
+
+        page += 1;
+      }
+
+      ownedServers = allServers
+        .filter(server => server.attributes?.user === dbUser.pterodactylId)
+        .map(server => ({
+          id: server.attributes.id,
+          name: server.attributes.name,
+          identifier: server.attributes.identifier,
+          uuid: server.attributes.uuid,
+          suspended: Boolean(server.attributes.suspended),
+          limits: {
+            memory: server.attributes?.limits?.memory || 0,
+            disk: server.attributes?.limits?.disk || 0,
+            cpu: server.attributes?.limits?.cpu || 0
+          },
+          node: server.attributes?.relationships?.node?.data?.attributes?.name || 'Unknown',
+          status: server.attributes.status,
+          internalId: server.attributes.internal_id
+        }));
+    } catch (serversError) {
+      console.warn('Could not fetch servers:', serversError.message);
+    }
+
+    const customer = {
+      id: dbUser.id,
+      pterodactylId: dbUser.pterodactylId,
+      username: pteroUsername,
+      email: pteroEmail,
+      firstName: pteroFirstName,
+      lastName: pteroLastName,
+      rootAdmin: pteroRootAdmin,
+      createdAt: pteroCreatedAt,
+      coins: dbUser.coins || 0,
+      packageName: dbUser.packageName || defaultPackage,
+      packageRAM,
+      packageDisk,
+      packageCpu,
+      packageServers,
+      extraRAM: dbUser.extraRam || 0,
+      extraDisk: dbUser.extraDisk || 0,
+      extraCpu: dbUser.extraCpu || 0,
+      extraServers: dbUser.extraServers || 0,
+      totalRAM: packageRAM + (dbUser.extraRam || 0),
+      totalDisk: packageDisk + (dbUser.extraDisk || 0),
+      totalCpu: packageCpu + (dbUser.extraCpu || 0),
+      totalServers: packageServers + (dbUser.extraServers || 0)
+    };
+
+    return { customer, ownedServers };
+  } catch (error) {
+    console.error('Error fetching admin ticket data:', error);
+    return { customer: fallbackCustomer, ownedServers: fallbackServers };
+  }
 }
