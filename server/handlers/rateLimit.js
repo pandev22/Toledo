@@ -16,6 +16,8 @@ const resetRequestRateLimit = createAuthRateLimit({ windowMs: 15 * 60 * 1000, li
 const resetConsumeRateLimit = createAuthRateLimit({ windowMs: 15 * 60 * 1000, limit: 10 });
 const magicLinkRateLimit = createAuthRateLimit({ windowMs: 15 * 60 * 1000, limit: 5 });
 const magicLoginRateLimit = createAuthRateLimit({ windowMs: 15 * 60 * 1000, limit: 10 });
+const adminWriteRateLimit = createAuthRateLimit({ windowMs: 15 * 60 * 1000, limit: 30 });
+const financialRateLimit = createAuthRateLimit({ windowMs: 15 * 60 * 1000, limit: 20 });
 
 module.exports = {
   createAuthRateLimit,
@@ -24,5 +26,7 @@ module.exports = {
   resetRequestRateLimit,
   resetConsumeRateLimit,
   magicLinkRateLimit,
-  magicLoginRateLimit
+  magicLoginRateLimit,
+  adminWriteRateLimit,
+  financialRateLimit
 };
