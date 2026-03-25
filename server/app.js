@@ -9,6 +9,8 @@ const cookieParser = require("cookie-parser");
 const path = require("path");
 const chalk = require('./handlers/colors');
 
+require("dotenv").config({ path: path.join(__dirname, ".env") });
+
 const createLogger = require("./handlers/console.js");
 const loadConfig = require("./handlers/config");
 const createAuthz = require("./handlers/authz");

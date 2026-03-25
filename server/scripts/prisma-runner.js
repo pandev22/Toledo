@@ -3,6 +3,8 @@
 const { spawnSync } = require("child_process");
 const path = require("path");
 
+require("dotenv").config({ path: path.join(__dirname, "..", ".env") });
+
 const rawArgs = process.argv.slice(2);
 
 let provider = (process.env.DB_PROVIDER || "sqlite").toLowerCase();
