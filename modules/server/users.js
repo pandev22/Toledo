@@ -4,7 +4,7 @@
 
 const express = require("express");
 const axios = require("axios");
-const { isAuthenticated, ownsServer, PANEL_URL, API_KEY } = require("./core.js");
+const { isAuthenticated, ownsServer, PANEL_URL, API_KEY, ADMIN_KEY } = require("./core.js");
 const loadConfig = require("../../handlers/config.js");
 const settings = loadConfig("./config.toml");
 let db;
@@ -128,6 +128,22 @@ module.exports.load = async function (app, _db) {
     try {
       const serverId = req.params.id;
       const { email } = req.body;
+
+      const panelUserResponse = await axios.get(
+        `${PANEL_URL}/api/application/users?filter[email]=${encodeURIComponent(email)}`,
+        {
+          headers: {
+            'Authorization': `Bearer ${ADMIN_KEY}`,
+            'Accept': 'application/json',
+          },
+        }
+      );
+
+      if (!Array.isArray(panelUserResponse.data?.data) || panelUserResponse.data.data.length === 0) {
+        return res.status(400).json({
+          error: 'No panel account exists with this email. The user must register first.'
+        });
+      }
 
       const response = await axios.post(
         `${PANEL_URL}/api/client/servers/${serverId}/users`,
