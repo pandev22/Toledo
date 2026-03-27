@@ -92,8 +92,9 @@ const ownsServer = async (req, res, next) => {
 
     // Normalize IDs for comparison
     const normalizeId = (id) => {
-      if (!id || typeof id !== 'string') return '';
-      return id.includes('-') ? id.split('-')[0] : id;
+      if (id === null || id === undefined) return '';
+      const value = String(id);
+      return value.includes('-') ? value.split('-')[0] : value;
     };
 
     const normalizedTargetId = normalizeId(serverId);
@@ -121,9 +122,10 @@ const ownsServer = async (req, res, next) => {
 
       // Check if user owns the server directly
       isOwner = ownedServers.some(s => {
-        const serverId = s.attributes?.identifier;
+        const internalId = normalizeId(s.attributes?.id);
+        const identifier = normalizeId(s.attributes?.identifier);
 
-        return normalizeId(serverId) === normalizedTargetId;
+        return internalId === normalizedTargetId || identifier === normalizedTargetId;
       });
     } catch (error) {
       console.error('Error fetching fresh server data from Pterodactyl:', error);
