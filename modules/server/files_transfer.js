@@ -60,63 +60,6 @@ module.exports.load = async function (app, db) {
     }
   });
 
-  // POST /api/server/:id/files/upload
-  router.post("/server/:id/files/upload", isAuthenticated, ownsServer, async (req, res) => {
-    try {
-      const serverId = req.params.id;
-      const directory = req.query.directory || "/";
-
-      const uploadUrlResponse = await axios.get(
-        `${PANEL_URL}/api/client/servers/${serverId}/files/upload`,
-        {
-          params: { directory },
-          headers: {
-            Authorization: `Bearer ${API_KEY}`,
-            Accept: "application/json",
-            "Content-Type": "application/json",
-          },
-        }
-      );
-
-      const signedUploadUrl = uploadUrlResponse.data?.attributes?.url;
-
-      if (!signedUploadUrl) {
-        return res.status(502).json({ error: "Failed to obtain upload URL from remote file server" });
-      }
-
-      const remoteResponse = await axios.post(signedUploadUrl, req, {
-        headers: {
-          "Content-Type": req.headers["content-type"],
-          ...(req.headers["content-length"] ? { "Content-Length": req.headers["content-length"] } : {}),
-        },
-        maxBodyLength: Infinity,
-        maxContentLength: Infinity,
-        validateStatus: () => true,
-      });
-
-      if (remoteResponse.status >= 200 && remoteResponse.status < 300) {
-        await recordServerActivity(db, req, serverId, 'files.upload', {
-          directory,
-        });
-
-        if (remoteResponse.status === 204) {
-          return res.status(204).send();
-        }
-
-        return res.status(remoteResponse.status).json(remoteResponse.data || { success: true });
-      }
-
-      return res.status(remoteResponse.status).json(
-        remoteResponse.data || { error: "Remote file server rejected the upload" }
-      );
-    } catch (error) {
-      console.error("Error uploading files:", error);
-      return res.status(500).json({
-        error: error.response?.data?.error || error.message || "Internal server error",
-      });
-    }
-  });
-
   // POST /api/server/:id/files/copy
   router.post("/server/:id/files/copy", isAuthenticated, ownsServer, validate(schemas.filesCopy), async (req, res) => {
     try {
