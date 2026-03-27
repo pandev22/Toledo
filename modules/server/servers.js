@@ -475,7 +475,7 @@ module.exports.load = async function (app, db) {
                                 docker_image: dbEgg.dockerImage,
                                 startup: dbEgg.startup,
                                 environment: dbEgg.environment || {},
-                                feature_limits: dbEgg.featureLimits || { databases: 4, backups: 4 }
+                                feature_limits: dbEgg.featureLimits || { databases: 0, backups: 0 }
                             }
                         };
                         pterodactylEggId = dbEgg.pterodactylEggId;
@@ -562,9 +562,9 @@ module.exports.load = async function (app, db) {
                     cpu: cpu
                 },
                 feature_limits: {
-                    databases: 4,
-                    backups: 4,
-                    allocations: 10
+                    databases: eggInfo.info.feature_limits.databases || 0,
+                    backups: eggInfo.info.feature_limits.backups || 0,
+                    allocations: eggInfo.info.feature_limits.allocations || 0
                 },
                 allocation: {
                     default: availableAllocationId

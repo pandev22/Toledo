@@ -184,26 +184,42 @@ const ownsServer = async (req, res, next) => {
 
     // FOURTH CHECK: Direct check with Pterodactyl API for subuser permissions
     try {
-      const cacheKey = `server_subusers_${normalizedTargetId}`;
+      const cacheKey = `server_subusers_${serverId}`;
       let serverUsers = serverCache.get(cacheKey);
 
       if (!serverUsers) {
-        const serverResponse = await axios.get(
-          `${PANEL_URL}/api/application/servers/${normalizedTargetId}?include=users`,
-          {
-            headers: {
-              'Authorization': `Bearer ${ADMIN_KEY}`,
-              'Accept': 'application/json',
-            },
-          }
-        );
-        serverUsers = serverResponse.data.attributes.relationships.users.data;
+        if (/^\d+$/.test(String(serverId))) {
+          const serverResponse = await axios.get(
+            `${PANEL_URL}/api/application/servers/${serverId}?include=users`,
+            {
+              headers: {
+                'Authorization': `Bearer ${ADMIN_KEY}`,
+                'Accept': 'application/json',
+              },
+            }
+          );
+          serverUsers = serverResponse.data.attributes.relationships.users.data;
+        } else {
+          const serverResponse = await axios.get(
+            `${PANEL_URL}/api/client/servers/${serverId}/users`,
+            {
+              headers: {
+                'Authorization': `Bearer ${API_KEY}`,
+                'Accept': 'application/json',
+              },
+            }
+          );
+          serverUsers = serverResponse.data.data;
+        }
+
         serverCache.set(cacheKey, serverUsers);
       }
 
       // Check if user is a subuser on this server
       const userIsSubuser = serverUsers.some(
         user => user.attributes.id === pteroUser.id
+          || user.attributes.username === pteroUser.username
+          || user.attributes.email === pteroUser.email
       );
 
       if (userIsSubuser) {
