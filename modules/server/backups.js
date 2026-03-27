@@ -34,6 +34,14 @@ module.exports.HeliactylModule = HeliactylModule;
 module.exports.load = async function (app, db) {
   const router = express.Router();
 
+  const getUpstreamError = (error, fallback = 'Internal server error') => {
+    const status = error.response?.status || 500;
+    const detail = error.response?.data?.errors?.[0]?.detail;
+    const message = error.response?.data?.error || detail || error.message || fallback;
+
+    return { status, message };
+  };
+
   // GET /api/server/:id/backups - List backups
   router.get("/server/:id/backups", isAuthenticated, ownsServer, async (req, res) => {
     try {
@@ -51,7 +59,8 @@ module.exports.load = async function (app, db) {
       res.json(response.data);
     } catch (error) {
       console.error("Error fetching backups:", error);
-      res.status(500).json({ error: "Internal server error" });
+      const { status, message } = getUpstreamError(error, 'Failed to fetch backups');
+      res.status(status).json({ error: message });
     }
   });
 
@@ -77,7 +86,8 @@ module.exports.load = async function (app, db) {
       res.status(201).json(response.data);
     } catch (error) {
       console.error("Error creating backup:", error);
-      res.status(500).json({ error: "Internal server error" });
+      const { status, message } = getUpstreamError(error, 'Failed to create backup');
+      res.status(status).json({ error: message });
     }
   });
 
@@ -106,7 +116,8 @@ module.exports.load = async function (app, db) {
         res.json(response.data);
       } catch (error) {
         console.error("Error generating backup download link:", error);
-        res.status(500).json({ error: "Internal server error" });
+        const { status, message } = getUpstreamError(error, 'Failed to generate backup download link');
+        res.status(status).json({ error: message });
       }
     }
   );
@@ -136,7 +147,8 @@ module.exports.load = async function (app, db) {
         res.status(204).send();
       } catch (error) {
         console.error("Error deleting backup:", error);
-        res.status(500).json({ error: "Internal server error" });
+        const { status, message } = getUpstreamError(error, 'Failed to delete backup');
+        res.status(status).json({ error: message });
       }
     }
   );
