@@ -477,7 +477,7 @@ const schemas = {
   // Subuser management
   subuserCreate: z.object({
     email: z.string({ required_error: 'Email is required' }).email('Invalid email format').trim(),
-    permissions: z.array(z.string().trim()).min(1, 'At least one permission is required')
+    permissions: z.array(z.string().trim()).min(1, 'At least one permission is required').optional()
   }),
 
   // Admin user management

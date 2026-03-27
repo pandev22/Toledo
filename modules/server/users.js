@@ -156,7 +156,6 @@ module.exports.load = async function (app, _db) {
       );
 
       await updateSubuserInfo(serverId, authz.getSessionUser(req).id);
-      await addUserToAllUsersList(response.data.attributes.username);
       await recordServerActivity(db, req, serverId, 'user.create', {
         email,
         username: response.data.attributes.username,
@@ -165,7 +164,10 @@ module.exports.load = async function (app, _db) {
       res.status(201).json(response.data);
     } catch (error) {
       console.error('Error creating user:', error);
-      res.status(500).json({ error: 'Internal server error' });
+      const status = error.response?.status || 500;
+      const detail = error.response?.data?.errors?.[0]?.detail;
+      const message = error.response?.data?.error || detail || error.message || 'Internal server error';
+      res.status(status).json({ error: message });
     }
   });
 
