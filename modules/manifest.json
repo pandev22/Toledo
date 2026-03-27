@@ -1,0 +1,149 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "HeliactylModule",
+  "type": "object",
+  "required": [
+    "name",
+    "version",
+    "api_level",
+    "target_platform"
+  ],
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "Name of the module"
+    },
+    "version": {
+      "type": "string",
+      "description": "Version of the module using semantic versioning"
+    },
+    "api_level": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "API level required by the module"
+    },
+    "target_platform": {
+      "type": "string",
+      "description": "Target platform version (e.g. '10.0.0')"
+    },
+    "description": {
+      "type": "string",
+      "description": "Brief description of what the module does"
+    },
+    "author": {
+      "type": [
+        "string",
+        "object"
+      ],
+      "description": "Author name or object with author details",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Author's name"
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "description": "Author's email"
+        },
+        "url": {
+          "type": "string",
+          "format": "uri",
+          "description": "Author's website or contact URL"
+        }
+      }
+    },
+    "dependencies": {
+      "type": "array",
+      "description": "List of module dependencies",
+      "items": {
+        "type": "object",
+        "required": [
+          "name",
+          "version"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Dependency module name"
+          },
+          "version": {
+            "type": "string",
+            "description": "Version requirement using semver format"
+          },
+          "optional": {
+            "type": "boolean",
+            "description": "Whether this dependency is optional",
+            "default": false
+          }
+        }
+      }
+    },
+    "permissions": {
+      "type": "array",
+      "description": "Permissions required by this module",
+      "items": {
+        "type": "string",
+        "enum": [
+          "user"
+        ]
+      }
+    },
+    "routes": {
+      "type": "array",
+      "description": "Routes provided by this module",
+      "items": {
+        "type": "object",
+        "required": [
+          "path",
+          "method"
+        ],
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "URL path for this route"
+          },
+          "method": {
+            "type": "string",
+            "enum": [
+              "GET",
+              "POST",
+              "PUT",
+              "DELETE",
+              "PATCH",
+              "WS"
+            ],
+            "description": "HTTP method for this route"
+          },
+          "description": {
+            "type": "string",
+            "description": "Brief description of this route's purpose"
+          }
+        }
+      }
+    },
+    "config": {
+      "type": "object",
+      "description": "Default configuration values for this module"
+    },
+    "hooks": {
+      "type": "array",
+      "description": "Event hooks this module listens to",
+      "items": {
+        "type": "string",
+        "description": "Event hook name"
+      }
+    },
+    "tags": {
+      "type": "array",
+      "description": "Tags for categorizing this module",
+      "items": {
+        "type": "string"
+      }
+    },
+    "license": {
+      "type": "string",
+      "description": "License identifier (e.g. 'MIT', 'GPL-3.0')"
+    }
+  }
+}

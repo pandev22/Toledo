@@ -1,0 +1,162 @@
+# ═════════════════════════════════════════════════════════
+#                     Heliactyl Config            
+#       This config will work with Heliactyl Next 10
+#          or any Toledo based distribution. (310+)        
+# ═════════════════════════════════════════════════════════
+
+# ---------------------------------
+# Heliactyl Release Information
+# ---------------------------------
+platform_codename = "Toledo"
+platform_level = 335 # channel: development - 24-02-2026 (Toledo)
+version = "10.0.0"
+
+# ---------------------------------
+# Additional Settings
+# ---------------------------------
+database = "heliactyl.db"
+
+# ---------------------------------
+# Webserver Configuration
+# ---------------------------------
+[website]
+name = "heliactyl" # Website/dashboard name
+logo = "https://i.imgur.com/6ykl8tF.png"
+port = 17_000 # Default: 25_001
+secret = "CHANGE_THIS_SECRET" # Change this - do not run Heliactyl in production with the default secret
+domain = "http://localhost:17000"
+
+# ---------------------------------
+# Pterodactyl Settings
+# ---------------------------------
+[pterodactyl]
+domain = "https://panel.heliactyl.toledo" # Format: https://panel.domain.tld with no / on the end
+key = "" # Find this under Admin -> Application API
+client_key = "" # Create an admin account and generate from Account -> API Keys
+
+# ---------------------------------
+# API Client Settings
+# ---------------------------------
+[api.client]
+accountSwitcher = true
+
+  # ---------------------------------
+  # Stripe
+  # ---------------------------------
+  [api.client.stripe]
+  secret_key = "sk_live_"
+
+  [api.client.discord]
+  client_id = ""
+  client_secret = "EL2IQYn-Qu"
+  bot_token = ".GP589Y."
+  server_id = ""
+
+  [api.client.resend]
+  # ---------------------------------
+  # Resend API Key
+  #
+  # This is required, but no worries as Resend is free.
+  # ---------------------------------
+  api_key = "re_xxxxxxxx_xxxxxxxxxxxxxxxxxxxxxxxx"
+  from = "noreply@example.com"
+  app_name = "Heliactyl"
+
+  [api.client.api] # Heliactyl API version 5
+  enabled = false
+  code = "YOUR_API_KEY"
+
+  [api.client.passwordgenerator]
+  signup = true # Disable user signups
+  length = 24
+
+  [api.client.allow]
+  regen = true # Allow users to regenerate their SFTP/panel password
+  overresourcessuspend = false # Suspend users if they go over resource limits
+
+    [api.client.allow.server]
+    create = true
+    modify = true
+    delete = true
+
+  [api.client.packages]
+  default = "default" # Default package assigned to users
+
+# ---------------------------------
+# Package Configuration
+# ---------------------------------
+[api.client.packages.list.default]
+ram = 2048
+disk = 3072
+cpu = 100
+servers = 2
+
+# ---------------------------------
+# Egg Configuration
+# ---------------------------------
+
+# ---------------------------------
+# Coin Configuration
+# ---------------------------------
+[api.client.coins]
+enabled = true
+
+    [api.client.coins.transfer]
+    enabled = true
+
+    [api.client.coins.store]
+    enabled = true
+
+      [api.client.coins.store.ram]
+      cost = 600
+
+      [api.client.coins.store.disk]
+      cost = 400
+
+      [api.client.coins.store.cpu]
+      cost = 500
+
+      [api.client.coins.store.servers]
+      cost = 200
+
+    [api.client.coins.boosts]
+    enabled = true
+
+# ---------------------------------
+# Logging Configuration
+# ---------------------------------
+[logging]
+status = true
+webhook = "https://discord.com/api/webhooks/your_webhook_url"
+
+[logging.actions.user]
+"Resources Purchased" = true
+"payment_success" = true
+"server_created" = true
+"server_modified" = true
+"server_deleted" = true
+
+[logging.actions.admin]
+"config updated" = true
+"config restored" = true
+"backup deleted" = true
+"dashboard reboot" = true
+"panel rebuilt" = true
+"panel rebuild failed" = true
+"radar node added" = true
+"radar node updated" = true
+"radar node deleted" = true
+"coins updated" = true
+"resources updated" = true
+
+# ---------------------------------
+# Renewal Configuration
+# ---------------------------------
+[renewal]
+enabled = true
+renewal_period_days = 2
+renewal_window_hours = 24
+check_interval_minutes = 5
+auto_delete_enabled = true
+auto_delete_after_days = 7
+api_delay_ms = 1000

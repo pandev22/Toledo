@@ -1,0 +1,356 @@
+const loadConfig = require("../handlers/config");
+const settings = loadConfig("./config.toml");
+const getPteroUser = require("../handlers/getPteroUser");
+const cache = require("../handlers/cache");
+const axios = require("axios");
+const LRU = require("lru-cache");
+const createAuthz = require('../handlers/authz');
+
+const pteroApi = axios.create({
+  baseURL: settings.pterodactyl.domain,
+  headers: {
+    'Content-Type': 'application/json',
+    'Accept': 'application/json',
+    'Authorization': `Bearer ${settings.pterodactyl.key}`
+  }
+});
+
+const settingsCache = new LRU({
+  max: 1,
+  ttl: 1000 * 30 // 30s
+});
+
+function getPublicSettings() {
+  const cached = settingsCache.get('public');
+  if (cached) return cached;
+
+  const payload = {
+    name: settings.website.name || "Heliactyl",
+    logo: settings.website.logo || "https://i.imgur.com/gUUze6A.png",
+    domain: settings.website.domain,
+    pterodactyl: settings.pterodactyl.domain,
+    features: {
+      coinTransfer: settings.api?.client?.coins?.transfer?.enabled ?? true,
+      boosts: settings.api?.client?.coins?.boosts?.enabled ?? true,
+    }
+  };
+  settingsCache.set('public', payload);
+  return payload;
+}
+
+const HeliactylModule = {
+  "name": "API v5",
+  "version": "1.0.0",
+  "api_level": 4,
+  "target_platform": "10.0.0",
+  "description": "Core module",
+  "author": {
+    "name": "Matt James",
+    "email": "me@ether.pizza",
+    "url": "https://ether.pizza"
+  },
+  "dependencies": [],
+  "permissions": [],
+  "routes": [],
+  "config": {},
+  "hooks": [],
+  "tags": ['core'],
+  "license": "MIT"
+};
+
+/* Module */
+module.exports.HeliactylModule = HeliactylModule;
+module.exports.load = async function (app, db) {
+  const authz = createAuthz(db);
+
+  app.get('/api/v5/state', async (req, res) => {
+    try {
+      if (!authz.hasUserSession(req)) {
+        return res.status(401).json({
+          authenticated: false,
+          message: 'Not authenticated'
+        });
+      }
+
+      // Check if 2FA verification is pending
+      const twoFactorPending = !!req.session.twoFactorPending;
+
+      // Get user data
+      const userData = authz.getSessionUser(req);
+      const userId = userData.id;
+
+      // Get 2FA status
+      const user = await db.user.findUnique({
+        where: { id: userId },
+        select: {
+          twoFactorEnabled: true,
+          isBanned: true,
+          banReason: true,
+          bannedAt: true,
+          bannedByUserId: true,
+          bannedByUsername: true,
+        }
+      });
+      const twoFactorEnabled = user?.twoFactorEnabled || false;
+      const banned = user?.isBanned === true;
+
+      // Return authentication state
+      return res.json({
+        authenticated: !twoFactorPending,
+        twoFactorPending: twoFactorPending,
+        twoFactorEnabled: twoFactorEnabled,
+        banned,
+        ban: banned ? authz.buildBanPayload(user) : null,
+        admin: await authz.getAdminStatus(req),
+        site_name: settings.website.name || "Heliactyl",
+        user: {
+          id: userData.id,
+          username: userData.username,
+          email: userData.email
+        }
+      });
+    } catch (error) {
+      console.error('Error in auth state check:', error);
+      return res.status(500).json({
+        authenticated: false,
+        message: 'Internal server error'
+      });
+    }
+  });
+
+  app.get("/api/v5/settings", async (req, res) => {
+    res.json(getPublicSettings());
+  });
+
+  app.get("/api/v5/resources", async (req, res) => {
+    try {
+      if (!authz.hasUserSession(req)) {
+        return res.status(401).json({
+          error: "Not authenticated"
+        });
+      }
+
+      const sessionUser = authz.getSessionUser(req);
+      const userId = sessionUser.id;
+      const user = await db.user.findUnique({
+        where: { id: sessionUser.id },
+        select: {
+          packageName: true,
+          extraRam: true,
+          extraDisk: true,
+          extraCpu: true,
+          extraServers: true
+        }
+      });
+
+      const packageKey = user?.packageName || settings.api?.client?.packages?.default || 'default';
+      const packageConfig = settings.api?.client?.packages?.list?.[packageKey] || settings.api?.client?.packages?.list?.default || {
+        ram: 0,
+        disk: 0,
+        cpu: 0,
+        servers: 0
+      };
+
+      const allowed = {
+        ram: (packageConfig.ram ?? 0) + (user?.extraRam ?? 0),
+        disk: (packageConfig.disk ?? 0) + (user?.extraDisk ?? 0),
+        cpu: (packageConfig.cpu ?? 0) + (user?.extraCpu ?? 0),
+        servers: (packageConfig.servers ?? 0) + (user?.extraServers ?? 0)
+      };
+
+      let current = {
+        ram: 0,
+        disk: 0,
+        cpu: 0,
+        servers: 0
+      };
+
+      try {
+        const pteroUser = await cache.getOrSet(
+          `ptero:user:${userId}:servers`,
+          () => getPteroUser(userId, db),
+          300
+        );
+        const ownedServers = pteroUser?.attributes?.relationships?.servers?.data ?? [];
+
+        current = ownedServers.reduce((totals, server) => {
+          const limits = server?.attributes?.limits ?? {};
+
+          return {
+            ram: totals.ram + (limits.memory ?? 0),
+            disk: totals.disk + (limits.disk ?? 0),
+            cpu: totals.cpu + (limits.cpu ?? 0),
+            servers: totals.servers + 1
+          };
+        }, current);
+      } catch (error) {
+        console.error('Error fetching current resource usage for /api/v5/resources:', error.message);
+      }
+
+      const remaining = {
+        ram: Math.max(allowed.ram - current.ram, 0),
+        disk: Math.max(allowed.disk - current.disk, 0),
+        cpu: Math.max(allowed.cpu - current.cpu, 0),
+        servers: Math.max(allowed.servers - current.servers, 0)
+      };
+
+      const limits = {
+        ram: allowed.ram,
+        disk: allowed.disk,
+        cpu: allowed.cpu,
+        servers: allowed.servers
+      };
+
+      return res.json({
+        package: packageKey,
+        allowed,
+        remaining,
+        current,
+        limits
+      });
+    } catch (error) {
+      console.error('Error in /api/v5/resources:', error);
+      return res.status(500).json({
+        error: 'Internal server error'
+      });
+    }
+  });
+
+  app.get("/api/coins", async (req, res) => {
+    if (!authz.hasUserSession(req)) {
+      return res.status(401).json({
+        error: "Not authenticated"
+      });
+    }
+    const userId = authz.getSessionUser(req).id;
+    const user = await db.user.findUnique({
+      where: { id: userId },
+      select: { coins: true }
+    });
+    const coins = user?.coins || 0;
+    res.json({
+      coins,
+      index: 0
+    });
+  });
+
+  // User
+  app.get("/api/user", async (req, res) => {
+    if (!authz.hasUserSession(req)) {
+      return res.status(401).json({
+        error: "Not authenticated"
+      });
+    }
+    res.json(authz.getSessionUser(req));
+  });
+
+  app.get("/api/remote/user", async (req, res) => {
+    if (!authz.hasPterodactylSession(req)) {
+      return res.status(401).json({
+        error: "Not authenticated"
+      });
+    }
+    const pteroUser = authz.getPterodactylUser(req);
+    res.json({
+      user: {
+        Id: pteroUser.id,
+        Username: pteroUser.username,
+        Email: pteroUser.email
+      },
+      Index: 0
+    });
+  });
+
+  // Consolidated init endpoint - replaces 5+ separate calls on page load
+  app.get("/api/v5/init", async (req, res) => {
+    try {
+      if (!authz.hasUserSession(req)) {
+        return res.status(401).json({
+          authenticated: false,
+          message: 'Not authenticated'
+        });
+      }
+
+      const userData = authz.getSessionUser(req);
+      const pteroUser = authz.getPterodactylUser(req);
+      const userId = userData.id;
+      const twoFactorPending = !!req.session.twoFactorPending;
+
+      // Batch all DB reads in a single query
+      const [userRecord, subuserServersFromPtero, subuserServersFromUserId] = await Promise.all([
+        db.user.findUnique({
+          where: { id: userId },
+          select: { twoFactorEnabled: true, coins: true, pterodactylId: true }
+        }),
+        pteroUser ? db.subuserServer.findMany({
+          where: { user: { pteroUsername: pteroUser.username }, source: 'subuser' }
+        }) : Promise.resolve([]),
+        pteroUser ? db.subuserServer.findMany({
+          where: { userId, source: 'subuser' }
+        }) : Promise.resolve([])
+      ]);
+
+      // 2FA
+      const twoFactorEnabled = userRecord?.twoFactorEnabled || false;
+
+      // Coins
+      const coins = userRecord?.coins || 0;
+
+      const isAdmin = await authz.getAdminStatus(req);
+
+      // Servers (uses existing cache layer)
+      let servers = [];
+      let subuserServers = [];
+      try {
+        const user = await cache.getOrSet(
+          `ptero:user:${userId}:servers`,
+          () => getPteroUser(userId, db),
+          300
+        );
+        if (user) {
+          servers = user.attributes.relationships.servers.data;
+        }
+      } catch (e) { /* servers failed, non-blocking */ }
+
+      // Subuser servers
+      if (pteroUser) {
+        const pteroSubs = subuserServersFromPtero || [];
+        const discordSubs = subuserServersFromUserId || [];
+        const serverIds = new Set(pteroSubs.map(s => s.serverId));
+        subuserServers = [...pteroSubs];
+        discordSubs.forEach(s => {
+          if (!serverIds.has(s.serverId)) {
+            subuserServers.push(s);
+            serverIds.add(s.serverId);
+          }
+        });
+      }
+
+      res.json({
+        state: {
+          authenticated: !twoFactorPending,
+          twoFactorPending,
+          twoFactorEnabled,
+          site_name: settings.website.name || "Heliactyl"
+        },
+        user: {
+          id: userData.id,
+          username: userData.username,
+          email: userData.email,
+          global_name: userData.global_name || userData.username
+        },
+        coins,
+        admin: isAdmin,
+        settings: getPublicSettings(),
+        servers,
+        subuserServers
+      });
+    } catch (error) {
+      console.error('Error in /api/v5/init:', error);
+      return res.status(500).json({
+        authenticated: false,
+        message: 'Internal server error'
+      });
+    }
+  });
+};
