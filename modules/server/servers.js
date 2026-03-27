@@ -114,6 +114,17 @@ async function checkUserResources(userId, db, additionalResources = { ram: 0, di
     };
 }
 
+async function getAvailableNodeAllocation(nodeId) {
+    const response = await pteroApi.get(`/api/application/nodes/${nodeId}/allocations`, {
+        params: {
+            per_page: 10000
+        }
+    });
+
+    const allocations = Array.isArray(response.data?.data) ? response.data.data : [];
+    return allocations.find((allocation) => allocation?.attributes?.assigned === false) || null;
+}
+
 // Main module export
 module.exports.load = async function (app, db) {
     const router = express.Router();
@@ -399,7 +410,7 @@ module.exports.load = async function (app, db) {
         try {
             const sessionUser = authz.getSessionUser(req);
 
-            const { name, egg, location, ram, disk, cpu } = req.body;
+            const { name, egg, nodeId, ram, disk, cpu } = req.body;
 
             // Get user's current resource usage and limits (with cache)
             const user = await cache.getOrSet(
@@ -478,6 +489,8 @@ module.exports.load = async function (app, db) {
                 return res.status(400).json({ error: 'Invalid egg specified' });
             }
 
+            let availableAllocationId = null;
+
             if (getLocationsFromDB && getNodesFromDB) {
                 let [locations, nodes] = await Promise.all([
                     getLocationsFromDB(db),
@@ -492,19 +505,32 @@ module.exports.load = async function (app, db) {
                     ]);
                 }
 
-                const selectedLocation = locations.find((entry) => entry.id.toString() === location.toString());
-                const hasEnabledNodes = nodes.some((entry) => entry.enabled && entry.locationId.toString() === location.toString());
+                const selectedNode = nodes.find((entry) => entry.id.toString() === nodeId.toString());
 
-                if (!selectedLocation || !selectedLocation.enabled || !hasEnabledNodes) {
-                    return res.status(400).json({ error: 'This location is not available' });
+                if (!selectedNode || !selectedNode.enabled) {
+                    return res.status(400).json({ error: 'This node is not available' });
+                }
+
+                const selectedLocation = locations.find((entry) => entry.id.toString() === selectedNode.locationId?.toString());
+
+                if (!selectedLocation || !selectedLocation.enabled) {
+                    return res.status(400).json({ error: 'This node location is not available' });
                 }
 
                 if (Array.isArray(selectedLocation.packages) && selectedLocation.packages.length > 0) {
                     const activePackage = packageName || settings.api.client.packages.default;
                     if (!selectedLocation.packages.includes(activePackage)) {
-                        return res.status(400).json({ error: 'This location is not available for your package' });
+                        return res.status(400).json({ error: 'This node is not available for your package' });
                     }
                 }
+
+                const availableAllocation = await getAvailableNodeAllocation(selectedNode.pterodactylNodeId || Number(selectedNode.id));
+
+                if (!availableAllocation) {
+                    return res.status(400).json({ error: 'No allocation is available on this node' });
+                }
+
+                availableAllocationId = availableAllocation.attributes.id;
             }
 
             // Validate against egg minimums
@@ -540,10 +566,8 @@ module.exports.load = async function (app, db) {
                     backups: 4,
                     allocations: 10
                 },
-                deploy: {
-                    locations: [location],
-                    dedicated_ip: false,
-                    port_range: []
+                allocation: {
+                    default: availableAllocationId
                 }
             };
 
