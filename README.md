@@ -166,6 +166,8 @@ server {
     listen [::]:443 ssl http2;
     server_name dashboard.yourdomain.com;
 
+    client_max_body_size 100M;
+
     ssl_certificate /path/to/cert.pem;
     ssl_certificate_key /path/to/key.pem;
     
@@ -180,6 +182,7 @@ server {
     location / {
         proxy_pass http://localhost:3000;
         proxy_http_version 1.1;
+        proxy_request_buffering off;
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection 'upgrade';
         proxy_set_header Host $host;
@@ -220,12 +223,7 @@ server {
     add_header X-Frame-Options "SAMEORIGIN" always;
     add_header X-XSS-Protection "1; mode=block" always;
     add_header X-Content-Type-Options "nosniff" always;
-    add_header Referrer-Policy "no-referrer-when-downgrade" always;
-    
-    # Optimize SSL
-    ssl_session_timeout 1d;
-    ssl_session_cache shared:SSL:50m;
-    ssl_session_tickets off;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
 }
 ```
 
