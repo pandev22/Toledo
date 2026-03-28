@@ -280,7 +280,7 @@ module.exports.load = async function (app, db) {
       const [userRecord, subuserServersFromPtero, subuserServersFromUserId] = await Promise.all([
         db.user.findUnique({
           where: { id: userId },
-          select: { twoFactorEnabled: true, coins: true, pterodactylId: true }
+          select: { twoFactorEnabled: true, coins: true, pterodactylId: true, discordId: true }
         }),
         pteroUser ? db.subuserServer.findMany({
           where: { user: { pteroUsername: pteroUser.username }, source: 'subuser' }
@@ -337,7 +337,8 @@ module.exports.load = async function (app, db) {
           id: userData.id,
           username: userData.username,
           email: userData.email,
-          global_name: userData.global_name || userData.username
+          global_name: userData.global_name || userData.username,
+          pterodactylEmail: pteroUser?.email || userData.email
         },
         coins,
         admin: isAdmin,

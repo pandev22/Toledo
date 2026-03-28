@@ -68,7 +68,7 @@ function generatePassword(length = 16) {
   return Array.from(array).map(x => chars[x % chars.length]).join('');
 }
 
-async function createPterodactylAccount(userId, username, email, retryCount = 0) {
+async function createPterodactylAccount(accountId, username, email, retryCount = 0) {
   if (retryCount > 3) {
     throw new Error('Maximum retry attempts reached for creating Pterodactyl account');
   }
@@ -100,14 +100,14 @@ async function createPterodactylAccount(userId, username, email, retryCount = 0)
 
   const password = generatePassword(16);
 
-  // Create a username with userId as fallback to ensure uniqueness
+  // Create a username with internal accountId as fallback to ensure uniqueness
   const baseUsername = sanitizeUsername(username);
-  // Include userId in the username for guaranteed uniqueness
-  const finalUsername = retryCount ? `${baseUsername}_${userId.slice(0, 6)}${retryCount}` : `${baseUsername}_${userId.slice(0, 6)}`;
+  // Include internal accountId in the username for guaranteed uniqueness
+  const finalUsername = retryCount ? `${baseUsername}_${accountId.slice(0, 6)}${retryCount}` : `${baseUsername}_${accountId.slice(0, 6)}`;
 
   try {
     const response = await pteroApi.post('/api/application/users', {
-      email: retryCount ? `discord_${userId}+${retryCount}@${email.split('@')[1]}` : `discord_${userId}@${email.split('@')[1]}`,
+      email: retryCount ? `discord_${accountId}+${retryCount}@${email.split('@')[1]}` : `discord_${accountId}@${email.split('@')[1]}`,
       username: finalUsername,
       first_name: username,
       last_name: 'User',
@@ -124,14 +124,14 @@ async function createPterodactylAccount(userId, username, email, retryCount = 0)
     };
   } catch (error) {
     if (error.response?.status === 422 && retryCount < 3) {
-      return createPterodactylAccount(userId, username, email, retryCount + 1);
+      return createPterodactylAccount(accountId, username, email, retryCount + 1);
     }
 
     console.error('Pterodactyl API error:', {
       message: error.message,
       username: finalUsername,
       originalUsername: username,
-      userId: userId,
+      accountId: accountId,
       email: email.replace(/@.*/, '@[redacted]'),
       retryCount,
       errors: error.response?.data?.errors
@@ -273,7 +273,6 @@ module.exports.load = async function (app, db) {
       let user = await db.user.findUnique({ where: { discordId: userData.id } });
       let pteroId = user?.pterodactylId;
       let isNewUser = !user;
-
       if (isNewUser) {
         const existingEmailUser = await db.user.findUnique({
           where: { email: userData.email },
@@ -286,8 +285,8 @@ module.exports.load = async function (app, db) {
       }
 
       // Verify existing Pterodactyl account or create new one
-      if (!pteroId || !(await verifyPterodactylAccount(pteroId))) {
-        const pteroAccount = await createPterodactylAccount(userData.id, userData.username, userData.email);
+      if (!isNewUser && (!pteroId || !(await verifyPterodactylAccount(pteroId)))) {
+        const pteroAccount = await createPterodactylAccount(user.id, userData.username, userData.email);
         pteroId = pteroAccount.id;
       }
 
@@ -300,12 +299,24 @@ module.exports.load = async function (app, db) {
             username: userData.username,
             email: userData.email,
             password: localPasswordHash,
-            pterodactylId: pteroId,
             discordAccessToken: tokenData.access_token,
             discordRefreshToken: tokenData.refresh_token,
             coins: DISCORD_SIGNUP_BONUS
           }
         });
+
+        try {
+          const pteroAccount = await createPterodactylAccount(user.id, userData.username, userData.email);
+          pteroId = pteroAccount.id;
+
+          user = await db.user.update({
+            where: { id: user.id },
+            data: { pterodactylId: pteroId }
+          });
+        } catch (error) {
+          await db.user.delete({ where: { id: user.id } });
+          throw error;
+        }
 
         await db.notification.create({ data: { userId: user.id, action: "coins:bonus", name: `Discord Signup Bonus: +${DISCORD_SIGNUP_BONUS} coins` } });
       } else {

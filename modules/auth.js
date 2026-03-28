@@ -252,17 +252,13 @@ module.exports.load = async function (app, db) {
       return res.status(409).json({ error: "Username already taken" });
     }
 
-    // Generate a unique user ID
-    const userId = crypto.randomUUID();
-
     // Hash the password
     const saltRounds = 12;
     const hashedPassword = await bcrypt.hash(password, saltRounds);
 
     // Store user information
-    await db.user.create({
+    const createdUser = await db.user.create({
       data: {
-        id: userId,
         username,
         email,
         password: hashedPassword,
@@ -296,7 +292,7 @@ module.exports.load = async function (app, db) {
     if (accountjson.status === 201) {
       let accountinfo = accountjson.data;
       await db.user.update({
-        where: { id: userId },
+        where: { id: createdUser.id },
         data: { pterodactylId: accountinfo.attributes.id }
       });
     } else {
