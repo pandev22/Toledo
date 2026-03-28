@@ -350,6 +350,13 @@ module.exports.load = async function (app, db) {
             },
           });
 
+          req.session.userinfo = {
+            id: user.id,
+            username: user.username,
+            email: user.email,
+            global_name: userData.global_name || userData.username,
+          };
+
           return authz.denyBannedRequest(req, res, bannedUser);
         }
       }

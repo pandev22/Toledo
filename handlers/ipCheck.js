@@ -1,5 +1,17 @@
-const AUTO_BAN_REASON = 'Suspicious login detected: this IP address is already associated with a different Discord account. If you believe this is a mistake, open a support ticket or create a Discord ticket for an unban review.';
+const AUTO_BAN_REASON = 'Suspicious login detected: this IP address is already associated with a different Discord account.';
 const AUTO_BAN_ACTOR = 'System (IP mismatch check)';
+
+function buildAutoBanReason({ userId, discordId, conflictingUserId, conflictingDiscordId, ipAddress }) {
+  const details = [
+    `Banned user ID: ${userId}`,
+    `Banned Discord ID: ${discordId}`,
+    `Conflicting user ID: ${conflictingUserId || 'unknown'}`,
+    `Conflicting Discord ID: ${conflictingDiscordId || 'unknown'}`,
+    `IP: ${ipAddress}`,
+  ].join(' | ');
+
+  return `${AUTO_BAN_REASON} ${details} If you believe this is a mistake, open a support ticket or create a Discord ticket for an unban review.`;
+}
 
 function createIpCheck(db) {
   async function checkAndRecordIp(clientIp, discordId, userId) {
@@ -20,11 +32,19 @@ function createIpCheck(db) {
     });
 
     if (existingRecord) {
+      const reason = buildAutoBanReason({
+        userId,
+        discordId,
+        conflictingUserId: existingRecord.userId,
+        conflictingDiscordId: existingRecord.discordId,
+        ipAddress: normalizedIp,
+      });
+
       await db.user.update({
         where: { id: userId },
         data: {
           isBanned: true,
-          banReason: AUTO_BAN_REASON,
+          banReason: reason,
           bannedAt: new Date(),
           bannedByUserId: null,
           bannedByUsername: AUTO_BAN_ACTOR,
@@ -33,7 +53,7 @@ function createIpCheck(db) {
 
       return {
         allowed: false,
-        reason: AUTO_BAN_REASON,
+        reason,
       };
     }
 
@@ -61,6 +81,7 @@ function createIpCheck(db) {
     checkAndRecordIp,
     AUTO_BAN_REASON,
     AUTO_BAN_ACTOR,
+    buildAutoBanReason,
   };
 }
 
