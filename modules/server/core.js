@@ -267,6 +267,7 @@ async function withServerWebSocket(serverId, callback) {
 
       let consoleBuffer = [];
       let authenticated = false;
+      let callbackStarted = false;
 
       ws.on('error', (error) => {
         clearTimeout(timeout);
@@ -285,6 +286,11 @@ async function withServerWebSocket(serverId, callback) {
         const message = JSON.parse(data.toString());
 
         if (message.event === 'auth success') {
+          if (callbackStarted) {
+            return;
+          }
+
+          callbackStarted = true;
           authenticated = true;
           try {
             await callback(ws, consoleBuffer);
