@@ -14,6 +14,7 @@ let db;
 const getPteroUser = require('../../handlers/getPteroUser');
 const NodeCache = require("node-cache");
 const createAuthz = require('../../handlers/authz');
+const { fetchWebSocketCredentials, invalidateWebSocketCredentials } = require('./websocketCredentials');
 const serverCache = new NodeCache({ stdTTL: 60 });
 let authz = null;
 
@@ -243,17 +244,13 @@ async function withServerWebSocket(serverId, callback) {
   let ws = null;
   try {
     // Get WebSocket credentials
-    const credsResponse = await axios.get(
-      `${PANEL_URL}/api/client/servers/${serverId}/websocket`,
-      {
-        headers: {
-          'Authorization': `Bearer ${API_KEY}`,
-          'Accept': 'application/json',
-        },
-      }
-    );
+    const credsResponse = await fetchWebSocketCredentials({
+      serverId,
+      panelUrl: PANEL_URL,
+      apiKey: API_KEY,
+    });
 
-    const { socket, token } = credsResponse.data.data;
+    const { socket, token } = credsResponse.data;
 
     // Connect to WebSocket
     return new Promise((resolve, reject) => {
@@ -306,19 +303,16 @@ async function withServerWebSocket(serverId, callback) {
         }
         else if (message.event === 'token expiring') {
           // Get new token
-          const newCredsResponse = await axios.get(
-            `${PANEL_URL}/api/client/servers/${serverId}/websocket`,
-            {
-              headers: {
-                'Authorization': `Bearer ${API_KEY}`,
-                'Accept': 'application/json',
-              },
-            }
-          );
+          invalidateWebSocketCredentials(serverId);
+          const newCredsResponse = await fetchWebSocketCredentials({
+            serverId,
+            panelUrl: PANEL_URL,
+            apiKey: API_KEY,
+          });
           // Send new token
           ws.send(JSON.stringify({
             event: "auth",
-            args: [newCredsResponse.data.data.token]
+            args: [newCredsResponse.data.token]
           }));
         }
       });

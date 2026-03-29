@@ -8,6 +8,23 @@ const { isAuthenticated, ownsServer, PANEL_URL, API_KEY } = require("./core.js")
 const { validate, schemas } = require('../../handlers/validate');
 const { recordServerActivity } = require('../../handlers/activityLog');
 
+function respondWithUpstreamError(res, error, fallbackMessage) {
+  const status = error.response?.status;
+  const retryAfter = error.response?.headers?.['retry-after'];
+
+  if (retryAfter) {
+    res.set('Retry-After', retryAfter);
+  }
+
+  if (status && status >= 400 && status < 500) {
+    return res.status(status).json(
+      error.response?.data ?? { error: fallbackMessage }
+    );
+  }
+
+  return res.status(500).json({ error: 'Internal server error' });
+}
+
 /* --------------------------------------------- */
 /* Heliactyl Next Module                                  */
 /* --------------------------------------------- */
@@ -51,7 +68,11 @@ module.exports.load = async function (app, db) {
       res.json(response.data);
     } catch (error) {
       console.error('Error fetching server variables:', error);
-      res.status(500).json({ error: 'Internal server error' });
+      return respondWithUpstreamError(
+        res,
+        error,
+        'Unable to fetch server variables from the panel'
+      );
     }
   });
 
@@ -79,7 +100,11 @@ module.exports.load = async function (app, db) {
       res.json(response.data);
     } catch (error) {
       console.error('Error updating server variable:', error);
-      res.status(500).json({ error: 'Internal server error' });
+      return respondWithUpstreamError(
+        res,
+        error,
+        'Unable to update server variable in the panel'
+      );
     }
   });
 
