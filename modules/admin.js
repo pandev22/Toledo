@@ -12,6 +12,7 @@ const settings = loadConfig('./config.toml');
 const { validate, schemas } = require('../handlers/validate');
 const { adminWriteRateLimit } = require('../handlers/rateLimit');
 const createAuthz = require('../handlers/authz');
+const { getSftpIpMode, setSftpIpMode } = require('../handlers/sftp');
 
 // Pterodactyl API helper
 const pteroApi = axios.create({
@@ -307,6 +308,43 @@ module.exports.load = async function (app, db) {
       res.json(config);
     } catch (error) {
       console.error("Error fetching config:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  app.get("/api/settings/sftp", async (req, res) => {
+    if (!await checkAdmin(req)) {
+      return res.status(403).json({ error: "Unauthorized" });
+    }
+
+    try {
+      const mode = await getSftpIpMode(db);
+      res.json({ mode });
+    } catch (error) {
+      console.error("Error fetching SFTP settings:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  app.patch("/api/settings/sftp", adminWriteRateLimit, validate(schemas.configSftpMode), async (req, res) => {
+    if (!await checkAdmin(req)) {
+      return res.status(403).json({ error: "Unauthorized" });
+    }
+
+    try {
+      const mode = await setSftpIpMode(db, req.body.mode);
+
+      log(
+        "sftp config updated",
+        `${req.session.userinfo.username} updated the SFTP IP mode to "${mode}".`
+      );
+
+      res.json({
+        success: true,
+        mode,
+      });
+    } catch (error) {
+      console.error("Error updating SFTP settings:", error);
       res.status(500).json({ error: "Internal server error" });
     }
   });

@@ -9,6 +9,7 @@ const cache = require('../../handlers/cache');
 const { validate, schemas } = require('../../handlers/validate');
 const createAuthz = require('../../handlers/authz');
 const { initializeServerRenewal, removeServerRenewal } = require('./renewals.js');
+const { applySftpIpMode, getSftpIpMode } = require('../../handlers/sftp');
 
 // Dynamic eggs helper - will be initialized in load()
 let getEggsFromDB = null;
@@ -392,15 +393,31 @@ module.exports.load = async function (app, db) {
                 300
             );
             const server = user.attributes.relationships.servers.data.find(
-                s => s.attributes.id === req.params.id
+                s => s.attributes.id === req.params.id || s.attributes.identifier === req.params.id
             );
 
             if (!server) {
                 return res.status(404).json({ error: 'Server not found' });
             }
 
-            res.json(server);
+            const [serverDetailsResponse, sftpMode] = await Promise.all([
+                pteroClientApi.get(`/api/client/servers/${server.attributes.identifier}`, {
+                    params: {
+                        include: 'allocations'
+                    }
+                }),
+                getSftpIpMode(db)
+            ]);
+
+            const serverDetails = serverDetailsResponse.data;
+            const detailedAttributes = serverDetails?.attributes || {};
+
+            res.json({
+                ...serverDetails,
+                attributes: applySftpIpMode(detailedAttributes, sftpMode)
+            });
         } catch (error) {
+            console.error('Error fetching server:', error);
             res.status(500).json({ error: 'Failed to fetch server' });
         }
     });

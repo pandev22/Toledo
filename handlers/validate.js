@@ -239,6 +239,12 @@ const schemas = {
       .trim()
   }),
 
+  configSftpMode: z.object({
+    mode: z.enum(['node', 'allocation'], {
+      errorMap: () => ({ message: 'SFTP mode must be: node or allocation' })
+    })
+  }),
+
   // Egg management (admin)
   eggUpdate: z.object({
     displayName: z.string().min(1).max(100).trim().optional(),

@@ -6,6 +6,7 @@ const express = require("express");
 const axios = require("axios");
 const { isAuthenticated, ownsServer, PANEL_URL, API_KEY } = require("./core.js");
 const { fetchWebSocketCredentials } = require("./websocketCredentials.js");
+const { applySftpIpMode, getSftpIpMode } = require("../../handlers/sftp");
 
 /* --------------------------------------------- */
 /* Heliactyl Next Module                                  */
@@ -69,17 +70,21 @@ module.exports.load = async function (app, db) {
   router.get("/server/:id", isAuthenticated, ownsServer, async (req, res) => {
     try {
       const serverId = req.params.id;
-      const response = await axios.get(
-        `${PANEL_URL}/api/client/servers/${serverId}`,
-        {
-          headers: {
-            Authorization: `Bearer ${API_KEY}`,
-            Accept: "application/json",
-            "Content-Type": "application/json",
-          },
-        }
-      );
-      res.json(response.data);
+      const [response, sftpMode] = await Promise.all([
+        axios.get(
+          `${PANEL_URL}/api/client/servers/${serverId}?include=allocations`,
+          {
+            headers: {
+              Authorization: `Bearer ${API_KEY}`,
+              Accept: "application/json",
+              "Content-Type": "application/json",
+            },
+          }
+        ),
+        getSftpIpMode(db),
+      ]);
+
+      res.json(applySftpIpMode(response.data, sftpMode));
     } catch (error) {
       console.error("Error fetching server details:", error);
       res.status(500).json({ error: "Internal server error" });
