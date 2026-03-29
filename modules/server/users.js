@@ -4,7 +4,7 @@
 
 const express = require("express");
 const axios = require("axios");
-const { isAuthenticated, ownsServer, PANEL_URL, API_KEY, ADMIN_KEY } = require("./core.js");
+const { isAuthenticated, ownsServer, invalidateServerAccessCache, PANEL_URL, API_KEY, ADMIN_KEY } = require("./core.js");
 const loadConfig = require("../../handlers/config.js");
 const settings = loadConfig("./config.toml");
 let db;
@@ -88,6 +88,8 @@ async function updateSubuserInfo(serverId, serverOwnerId) {
         });
       }
     }
+
+    invalidateServerAccessCache(serverId);
   } catch (error) {
     console.error(`Error updating subuser info:`, error);
   }
@@ -200,6 +202,7 @@ module.exports.load = async function (app, _db) {
           },
         }
       );
+      invalidateServerAccessCache(serverId);
       await recordServerActivity(db, req, serverId, 'user.delete', {
         userId,
       });

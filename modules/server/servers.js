@@ -8,6 +8,7 @@ const log = require('../../handlers/log');
 const cache = require('../../handlers/cache');
 const { validate, schemas } = require('../../handlers/validate');
 const createAuthz = require('../../handlers/authz');
+const { ownsServer } = require('./core');
 const { initializeServerRenewal, removeServerRenewal } = require('./renewals.js');
 const { applySftpIpMode, getSftpIpMode } = require('../../handlers/sftp');
 
@@ -384,7 +385,8 @@ module.exports.load = async function (app, db) {
     });
 
     // GET /api/servers/:id - Get specific server
-    router.get('/server/:id', async (req, res) => {
+    
+    router.get('/server/:id', ownsServer, async (req, res) => {
         try {
             const sessionUser = authz.getSessionUser(req);
             const user = await cache.getOrSet(
@@ -395,13 +397,10 @@ module.exports.load = async function (app, db) {
             const server = user.attributes.relationships.servers.data.find(
                 s => s.attributes.id === req.params.id || s.attributes.identifier === req.params.id
             );
-
-            if (!server) {
-                return res.status(404).json({ error: 'Server not found' });
-            }
+            const serverIdentifier = server?.attributes?.identifier || req.params.id;
 
             const [serverDetailsResponse, sftpMode] = await Promise.all([
-                pteroClientApi.get(`/api/client/servers/${server.attributes.identifier}`, {
+                pteroClientApi.get(`/api/client/servers/${serverIdentifier}`, {
                     params: {
                         include: 'allocations'
                     }

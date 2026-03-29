@@ -18,6 +18,14 @@ const { fetchWebSocketCredentials, invalidateWebSocketCredentials } = require('.
 const serverCache = new NodeCache({ stdTTL: 60 });
 let authz = null;
 
+function invalidateServerAccessCache(serverId) {
+  if (!serverId) {
+    return;
+  }
+
+  serverCache.del(`server_subusers_${serverId}`);
+}
+
 const workflowsFilePath = path.join(__dirname, "../../storage/workflows.json");
 
 /* --------------------------------------------- */
@@ -150,7 +158,7 @@ const ownsServer = async (req, res, next) => {
     // SECOND CHECK: Check if user is a subuser via pterodactyl username
     try {
       const pteroUsername = pteroUser.username;
-      const results = await db.subuserServer.findMany({ where: { user: { pteroUsername } } });
+      const results = await db.subuserServer.findMany({ where: { user: { pteroUsername }, source: 'subuser' } });
       const subuserServers = results.map(s => ({ id: s.serverId, name: s.serverName, ownerId: s.ownerId }));
 
       let hasAccess = subuserServers.some(server => {
@@ -165,13 +173,13 @@ const ownsServer = async (req, res, next) => {
       console.error('Error checking subuser access by username:', error);
     }
 
-    // THIRD CHECK: Check if user is a subuser via discord ID
+    // THIRD CHECK: Check if user is a subuser via direct user ID
     try {
-      const discordId = sessionUser.id;
-      const results = await db.subuserServer.findMany({ where: { user: { discordId } } });
-      const discordServers = results.map(s => ({ id: s.serverId, name: s.serverName, ownerId: s.ownerId }));
+      const userId = sessionUser.id;
+      const results = await db.subuserServer.findMany({ where: { userId, source: 'subuser' } });
+      const userServers = results.map(s => ({ id: s.serverId, name: s.serverName, ownerId: s.ownerId }));
 
-      let hasAccess = discordServers.some(server => {
+      let hasAccess = userServers.some(server => {
         const normalizedSubuserId = normalizeId(server?.id);
         return normalizedSubuserId === normalizedTargetId;
       });
@@ -180,7 +188,7 @@ const ownsServer = async (req, res, next) => {
         return next();
       }
     } catch (error) {
-      console.error('Error checking subuser access by discord ID:', error);
+      console.error('Error checking subuser access by user ID:', error);
     }
 
     // FOURTH CHECK: Direct check with Pterodactyl API for subuser permissions
@@ -218,7 +226,7 @@ const ownsServer = async (req, res, next) => {
 
       // Check if user is a subuser on this server
       const userIsSubuser = serverUsers.some(
-        user => user.attributes.id === pteroUser.id
+        user => String(user.attributes.id) === String(pteroUser.id)
           || user.attributes.username === pteroUser.username
           || user.attributes.email === pteroUser.email
       );
@@ -389,6 +397,7 @@ module.exports = {
   load: module.exports.load,
   isAuthenticated,
   ownsServer,
+  invalidateServerAccessCache,
   withServerWebSocket,
   sendCommandAndGetResponse,
   apiRequest,
