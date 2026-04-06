@@ -30,6 +30,15 @@ const HeliactylModule = {
 
 module.exports.HeliactylModule = HeliactylModule;
 
+const AFK_DB_KEYS = {
+  config: 'afk:config'
+};
+
+const DEFAULT_AFK_CONFIG = {
+  enabled: true,
+  dailyCap: 45
+};
+
 class AFKRewardsManager {
   constructor(db) {
     this.db = db;
@@ -38,6 +47,50 @@ class AFKRewardsManager {
     this.timeouts = new Map();
     this.stateTimeouts = new Map();
     this.sessions = new Map();
+  }
+
+  async getConfig() {
+    try {
+      const row = await this.db.heliactyl.findUnique({ where: { key: AFK_DB_KEYS.config } });
+      const config = row ? JSON.parse(row.value) : null;
+      return config ? { ...DEFAULT_AFK_CONFIG, ...config } : DEFAULT_AFK_CONFIG;
+    } catch {
+      return DEFAULT_AFK_CONFIG;
+    }
+  }
+
+  async setConfig(newConfig) {
+    const current = await this.getConfig();
+    const merged = { ...current, ...newConfig };
+
+    await this.db.heliactyl.upsert({
+      where: { key: AFK_DB_KEYS.config },
+      update: { value: JSON.stringify(merged) },
+      create: { key: AFK_DB_KEYS.config, value: JSON.stringify(merged) }
+    });
+
+    return merged;
+  }
+
+  getStartOfToday() {
+    const now = new Date();
+    return new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  }
+
+  async getTodayAfkTotal(userId) {
+    const todayStart = this.getStartOfToday();
+    const summary = await this.db.transaction.aggregate({
+      where: {
+        userId,
+        type: 'afk',
+        createdAt: { gte: todayStart }
+      },
+      _sum: {
+        amount: true
+      }
+    });
+
+    return summary._sum.amount || 0;
   }
 
   hasActiveSession(userId) {
@@ -68,13 +121,28 @@ class AFKRewardsManager {
 
   async processReward(userId, ws) {
     try {
+      const config = await this.getConfig();
+      if (!config.enabled) {
+        ws.close(4003, 'AFK disabled');
+        return;
+      }
+
+      const todayTotal = await this.getTodayAfkTotal(userId);
+      const remainingToday = Math.max(0, config.dailyCap - todayTotal);
+      const rewardAmount = Math.min(this.COINS_PER_MINUTE, remainingToday);
+
+      if (rewardAmount <= 0) {
+        ws.close(4004, 'Daily cap reached');
+        return;
+      }
+
       // Use atomic increment for coins
       await this.db.$transaction(async (tx) => {
         await tx.user.update({
           where: { id: userId },
           data: { 
-            coins: { increment: this.COINS_PER_MINUTE },
-            totalCoinsEarned: { increment: this.COINS_PER_MINUTE }
+            coins: { increment: rewardAmount },
+            totalCoinsEarned: { increment: rewardAmount }
           }
         });
 
@@ -82,7 +150,7 @@ class AFKRewardsManager {
           data: {
             userId,
             type: 'afk',
-            amount: this.COINS_PER_MINUTE,
+            amount: rewardAmount,
             description: 'AFK Rewards'
           }
         });
@@ -255,6 +323,18 @@ module.exports.load = function (app, db) {
     const userId = authz.getSessionUser(req).id;
 
     try {
+      const afkConfig = await afkManager.getConfig();
+      if (!afkConfig.enabled) {
+        ws.close(4003, 'AFK disabled');
+        return;
+      }
+
+      const todayTotal = await afkManager.getTodayAfkTotal(userId);
+      if (todayTotal >= afkConfig.dailyCap) {
+        ws.close(4004, 'Daily cap reached');
+        return;
+      }
+
       if (afkManager.hasActiveSession(userId)) {
         ws.close(4002, 'Already connected');
         return;
@@ -305,6 +385,65 @@ module.exports.load = function (app, db) {
         message: error.message,
         stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
       });
+    }
+  });
+
+  app.get('/api/afk/config', async (req, res) => {
+    try {
+      const config = await afkManager.getConfig();
+      res.json(config);
+    } catch (error) {
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  app.get('/api/admin/afk/config', async (req, res) => {
+    if (!await authz.getAdminStatus(req)) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+
+    try {
+      const config = await afkManager.getConfig();
+      res.json(config);
+    } catch (error) {
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  app.post('/api/admin/afk/config', async (req, res) => {
+    if (!await authz.getAdminStatus(req)) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+
+    try {
+      const currentConfig = await afkManager.getConfig();
+      const nextConfig = {};
+
+      if (req.body.enabled !== undefined) {
+        if (typeof req.body.enabled !== 'boolean') {
+          return res.status(400).json({ error: 'Enabled must be a boolean' });
+        }
+
+        nextConfig.enabled = req.body.enabled;
+      }
+
+      if (req.body.dailyCap !== undefined) {
+        const parsedCap = Number.parseInt(req.body.dailyCap, 10);
+        if (Number.isNaN(parsedCap) || parsedCap < 1) {
+          return res.status(400).json({ error: 'Daily cap must be an integer greater than or equal to 1' });
+        }
+
+        nextConfig.dailyCap = parsedCap;
+      }
+
+      const updatedConfig = await afkManager.setConfig({
+        enabled: nextConfig.enabled ?? currentConfig.enabled,
+        dailyCap: nextConfig.dailyCap ?? currentConfig.dailyCap
+      });
+
+      res.json({ success: true, config: updatedConfig });
+    } catch (error) {
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 
