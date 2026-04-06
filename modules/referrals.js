@@ -73,37 +73,39 @@ module.exports.load = async function (app, db) {
 
     const referralCode = req.query.code;
 
-    // Retrieve the referral code
-    const referral = await db.referral.findUnique({
-      where: { code: referralCode }
-    });
-
-    if (!referral) {
-      return res.json({ error: "Invalid code" });
-    }
-
-    // Check if user has already claimed a code
-    const alreadyClaimed = await db.referral.findFirst({
-      where: { claimedById: sessionUser.id }
-    });
-
-    if (alreadyClaimed) {
-      return res.json({ error: "Already claimed a code" });
-    }
-
-    // Check if the referral code was created by the user
-    if (referral.userId === sessionUser.id) {
-      return res.json({ error: "Cannot claim your own code" });
-    }
-
-    // Check if code was already claimed (unique constraint in schema but good to check)
-    if (referral.claimedById) {
-      return res.json({ error: "Code already claimed" });
-    }
-
     try {
-      // Award the referral bonus atomically
-      await db.$transaction(async (tx) => {
+      const claimResult = await db.$transaction(async (tx) => {
+        const referral = await tx.referral.findUnique({
+          where: { code: referralCode },
+          select: {
+            id: true,
+            userId: true,
+            claimedById: true
+          }
+        });
+
+        if (!referral) {
+          return { error: "Invalid code" };
+        }
+
+        if (referral.userId === sessionUser.id) {
+          return { error: "Cannot claim your own code" };
+        }
+
+        const alreadyClaimed = await tx.referral.findFirst({
+          where: { claimedById: sessionUser.id },
+          select: { id: true }
+        });
+
+        if (alreadyClaimed) {
+          return { error: "Already claimed a code" };
+        }
+
+        if (referral.claimedById) {
+          return { error: "Code already claimed" };
+        }
+
+        // Award the referral bonus atomically
         // Award the owner
         await tx.user.update({
           where: { id: referral.userId },
@@ -142,10 +144,20 @@ module.exports.load = async function (app, db) {
             claimedAt: new Date()
           }
         });
+
+        return { success: true };
       });
+
+      if (claimResult.error) {
+        return res.json({ error: claimResult.error });
+      }
 
       res.json({ success: "Referral code claimed" });
     } catch (error) {
+      if (error?.code === 'P2002') {
+        return res.json({ error: "Already claimed a code" });
+      }
+
       console.error("Referral claim error:", error);
       res.json({ error: "Failed to claim referral code" });
     }
