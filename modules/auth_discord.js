@@ -398,6 +398,8 @@ module.exports.load = async function (app, db) {
       // Add login notification
       await db.notification.create({ data: { userId: user.id, action: "user:auth", name: "Sign in with Discord" } });
 
+      log('auth_discord', `**${user.username}** (${user.email}) logged in with Discord${isNewUser ? ' (new account)' : ''}\nDiscord: \`${userData.username}\` (\`${userData.id}\`)\nIP: \`${clientIp || 'unknown'}\``);
+
       res.redirect('/dashboard');
     } catch (error) {
       console.error('Discord authentication failed:', error);

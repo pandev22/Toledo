@@ -299,6 +299,8 @@ module.exports.load = async function (app, db) {
       return res.status(201).json({ error: "Your account has been created. Please login" });
     }
 
+    log('auth_register', `**${username}** (${email}) registered a new account`);
+
     res.status(201).json({ message: "User registered successfully" });
   });
 
@@ -390,6 +392,8 @@ module.exports.load = async function (app, db) {
           name: "Sign in from new location"
         }
       });
+
+      log('auth_login', `**${user.username}** (${user.email}) logged in with email/password\nIP: \`${clientIp || 'unknown'}\``);
 
       res.json({ message: "Login successful" });
     } catch (error) {

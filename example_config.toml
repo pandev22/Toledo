@@ -135,6 +135,11 @@ webhook = "https://discord.com/api/webhooks/your_webhook_url"
 "server_created" = true
 "server_modified" = true
 "server_deleted" = true
+"auth_login" = true
+"auth_register" = true
+"auth_discord" = true
+"afk_connect" = true
+"afk_disconnect" = true
 
 [logging.actions.admin]
 "config updated" = true

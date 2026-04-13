@@ -103,7 +103,9 @@ class AFKRewardsManager {
     this.sessions.set(userId, {
       clusterId,
       lastReward: Date.now(),
-      lastUpdate: Date.now()
+      lastUpdate: Date.now(),
+      startTime: Date.now(),
+      coinsEarned: 0
     });
   }
 
@@ -148,16 +150,22 @@ class AFKRewardsManager {
           }
         });
 
+        const session = this.sessions.get(userId);
+        const sessionMinutes = session ? Math.round((Date.now() - session.startTime) / 60000) : 0;
+
         await tx.transaction.create({
           data: {
             userId,
             type: 'afk',
             amount: rewardAmount,
-            description: 'AFK Rewards'
+            description: 'AFK Rewards',
+            details: JSON.stringify({ sessionDuration: sessionMinutes })
           }
         });
       });
 
+      const session = this.sessions.get(userId);
+      if (session) session.coinsEarned += rewardAmount;
       this.updateSession(userId);
       this.sendState(userId, ws);
       this.scheduleNextReward(userId, ws);
@@ -322,7 +330,8 @@ module.exports.load = function (app, db) {
       return;
     }
 
-    const userId = authz.getSessionUser(req).id;
+    const sessionUser = authz.getSessionUser(req);
+    const userId = sessionUser.id;
 
     try {
       const afkConfig = await afkManager.getConfig();
@@ -347,7 +356,15 @@ module.exports.load = function (app, db) {
       afkManager.scheduleNextReward(userId, ws);
       afkManager.startStateUpdates(userId, ws);
 
+      const clientIp = req.headers['x-forwarded-for']?.split(',')[0] || req.socket.remoteAddress?.replace('::ffff:', '');
+      const user = await db.user.findUnique({ where: { id: userId }, select: { email: true, discordId: true } });
+      log('afk_connect', `**${sessionUser.username}** started an AFK session\nEmail: \`${user?.email || 'unknown'}\`\nDiscord: \`${user?.discordId || 'none'}\`\nIP: \`${clientIp || 'unknown'}\``);
+
       ws.on('close', () => {
+        const session = afkManager.sessions.get(userId);
+        const duration = session ? Math.round((Date.now() - session.startTime) / 60000) : 0;
+        const earned = session ? session.coinsEarned : 0;
+        log('afk_disconnect', `**${sessionUser.username}** ended AFK session\nDuration: **${duration} min**\nCoins earned: **${earned}**`);
         afkManager.cleanup(userId);
       });
 
