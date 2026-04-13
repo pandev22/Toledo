@@ -132,6 +132,8 @@ class AFKRewardsManager {
       const rewardAmount = Math.min(this.COINS_PER_MINUTE, remainingToday);
 
       if (rewardAmount <= 0) {
+        try { ws.send(JSON.stringify({ type: 'daily_cap_reached', dailyCap: config.dailyCap })); } catch {}
+        this.cleanup(userId);
         ws.close(4004, 'Daily cap reached');
         return;
       }
@@ -331,6 +333,7 @@ module.exports.load = function (app, db) {
 
       const todayTotal = await afkManager.getTodayAfkTotal(userId);
       if (todayTotal >= afkConfig.dailyCap) {
+        try { ws.send(JSON.stringify({ type: 'daily_cap_reached', dailyCap: afkConfig.dailyCap })); } catch {}
         ws.close(4004, 'Daily cap reached');
         return;
       }
