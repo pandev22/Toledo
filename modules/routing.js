@@ -77,7 +77,7 @@ module.exports.load = async function (app, db) {
   }));
 
   app.get('/*', async (req, res, next) => {
-    if (req.path.startsWith('/api/')) return next();
+    if (req.path.startsWith('/api/') || req.path.endsWith('/.websocket')) return next();
 
     try {
       const html = cachedHtml || await refreshHtmlCache('request fallback');
