@@ -1570,21 +1570,19 @@ module.exports.load = async function (app, db) {
     }
 
     try {
-      // Fetch data from Pterodactyl
-      const [usersResponse, serversResponse, nodesResponse] = await Promise.all([
+      // Fetch data from Pterodactyl + local DB
+      const [usersResponse, serversResponse, nodesResponse, enabledLocations] = await Promise.all([
         pteroApi.get('/api/application/users?per_page=1'),
         pteroApi.get('/api/application/servers?per_page=1'),
-        pteroApi.get('/api/application/nodes?per_page=1')
+        pteroApi.get('/api/application/nodes?per_page=1'),
+        db.locationConfig.count({ where: { enabled: true } })
       ]);
-
-      // Get locations from config
-      const locations = Object.keys(settings.api.client.locations || {});
 
       const stats = {
         totalUsers: usersResponse.data.meta.pagination.total || 0,
         totalServers: serversResponse.data.meta.pagination.total || 0,
         totalNodes: nodesResponse.data.meta.pagination.total || 0,
-        totalLocations: locations.length
+        totalLocations: enabledLocations
       };
 
       res.json(stats);
