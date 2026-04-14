@@ -1175,6 +1175,30 @@ module.exports.load = async function (app, db) {
     }
   });
 
+  // Get discord ID map for all users (used for admin search by discord ID)
+  app.get("/api/users/bulk/discord-ids", async (req, res) => {
+    if (!await authz.getAdminStatus(req)) {
+      return res.status(403).json({ error: "Unauthorized" });
+    }
+
+    try {
+      const users = await db.user.findMany({
+        where: { discordId: { not: null }, pterodactylId: { not: null } },
+        select: { pterodactylId: true, discordId: true }
+      });
+
+      const results = {};
+      for (const user of users) {
+        results[user.pterodactylId] = user.discordId;
+      }
+
+      res.json(results);
+    } catch (error) {
+      console.error("Error fetching bulk discord IDs:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
   app.get("/api/users/:id/ban", async (req, res) => {
     if (!await authz.getAdminStatus(req)) {
       return res.status(403).json({ error: "Unauthorized" });
