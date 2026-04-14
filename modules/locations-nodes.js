@@ -227,6 +227,21 @@ module.exports.syncLocationsAndNodes = syncLocationsAndNodes;
 module.exports.load = async function (app, db) {
   const router = express.Router();
 
+  // Public endpoint - counts of enabled locations and nodes
+  router.get('/locations', async (req, res) => {
+    try {
+      const [locations, nodes] = await Promise.all([
+        db.locationConfig.count({ where: { enabled: true } }),
+        db.nodeConfig.count({ where: { enabled: true } })
+      ]);
+
+      res.json({ locations, nodes });
+    } catch (error) {
+      console.error('Error fetching location counts:', error);
+      res.status(500).json({ error: 'Failed to fetch location counts' });
+    }
+  });
+
   router.get('/admin/locations-nodes', async (req, res) => {
     if (!await checkAdminStatus(req, res, db)) {
       return res.status(403).json({ error: 'Unauthorized' });

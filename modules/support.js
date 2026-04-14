@@ -5,6 +5,7 @@ const axios = require("axios");
 const { paginate, getPaginationParams } = require("../handlers/pagination");
 const { validate, schemas } = require("../handlers/validate");
 const createAuthz = require('../handlers/authz');
+const log = require('../handlers/log');
 
 // Pterodactyl API helper
 const pteroApi = axios.create({
@@ -273,6 +274,9 @@ module.exports.load = async function (app, db) {
         }
       });
 
+      // Webhook log for ticket creation
+      log('ticket_created', `**${sessionUser.username || sessionUser.email}** created ticket **#${ticket.id.slice(0, 8).toUpperCase()}**\n**Subject:** ${subject}\n**Priority:** ${priority}\n**Category:** ${category}`);
+
       res.status(201).json(ticket);
     } catch (error) {
       console.error("Error creating ticket:", error);
@@ -288,7 +292,21 @@ module.exports.load = async function (app, db) {
 
     try {
       const { page, perPage } = getPaginationParams(req.query);
+      const { status, priority, category, query } = req.query;
+
+      const where = {};
+      if (status) where.status = status;
+      if (priority) where.priority = priority;
+      if (category) where.category = category;
+      if (query) {
+        where.OR = [
+          { subject: { contains: query } },
+          { messages: { some: { content: { contains: query } } } }
+        ];
+      }
+
       const tickets = await db.ticket.findMany({
+        where,
         include: { 
           messages: true,
           user: {
@@ -438,6 +456,10 @@ module.exports.load = async function (app, db) {
           }
         });
       }
+
+      // Webhook log for ticket reply
+      const sender = isAdmin ? 'Staff' : (sessionUser.username || sessionUser.email);
+      log('ticket_reply', `**${sender}** replied to ticket **#${ticket.id.slice(0, 8).toUpperCase()}**\n**Subject:** ${ticket.subject}\n**Message:** ${content.length > 200 ? content.slice(0, 200) + '...' : content}`);
 
       res.json({
         ...message,

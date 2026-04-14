@@ -605,8 +605,8 @@ const schemas = {
 
   // Daily rewards protection
   dailyProtection: z.object({
-    level: z.enum(['basic', 'premium', 'ultimate'], {
-      errorMap: () => ({ message: 'Level must be: basic, premium, or ultimate' })
+    level: z.enum(['bronze', 'silver', 'gold'], {
+      errorMap: () => ({ message: 'Level must be: bronze, silver, or gold' })
     })
   }),
 

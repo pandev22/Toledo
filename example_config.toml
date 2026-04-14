@@ -140,6 +140,8 @@ webhook = "https://discord.com/api/webhooks/your_webhook_url"
 "auth_discord" = true
 "afk_connect" = true
 "afk_disconnect" = true
+"ticket_created" = true
+"ticket_reply" = true
 
 [logging.actions.admin]
 "config updated" = true
