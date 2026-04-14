@@ -91,8 +91,7 @@ module.exports.load = async function (app, db) {
 
       // Get existing authenticator IDs
       const excludeCredentials = existingPasskeys.map(passkey => ({
-        id: Buffer.from(passkey.credentialID, 'base64url'),
-        type: 'public-key',
+        id: passkey.credentialID,
         transports: passkey.transports ? JSON.parse(passkey.transports) : ['internal']
       }));
 
@@ -151,27 +150,28 @@ module.exports.load = async function (app, db) {
         return res.status(400).json({ error: 'Passkey registration failed' });
       }
 
-      // Get the important information from the verification
-      const { credentialID, credentialPublicKey, counter } = verification.registrationInfo;
+      // Get the important information from the verification (v10+ API)
+      const { credential } = verification.registrationInfo;
 
-      // Properly handle the ArrayBuffer or TypedArray
-      const credentialIdBase64 = Buffer.isBuffer(credentialID)
-        ? credentialID.toString('base64url')
-        : Buffer.from(new Uint8Array(credentialID)).toString('base64url');
+      // credential.id is already a Base64URLString in v10+
+      const credentialIdBase64 = credential.id;
+      // credential.publicKey is a Uint8Array
+      const credentialKeyBase64 = Buffer.from(credential.publicKey).toString('base64url');
 
-      const credentialKeyBase64 = Buffer.isBuffer(credentialPublicKey)
-        ? credentialPublicKey.toString('base64url')
-        : Buffer.from(new Uint8Array(credentialPublicKey)).toString('base64url');
+      // Reject if this credential is already registered
+      const existing = await db.passkey.findUnique({ where: { credentialID: credentialIdBase64 } });
+      if (existing) {
+        return res.status(409).json({ error: 'This passkey is already registered' });
+      }
 
-      // Save the new passkey
       await db.passkey.create({
         data: {
           userId: registrationUserId,
           name: name,
           credentialID: credentialIdBase64,
           credentialPublicKey: credentialKeyBase64,
-          counter: counter,
-          transports: JSON.stringify(req.body.response.transports || ['internal'])
+          counter: credential.counter,
+          transports: JSON.stringify(credential.transports || ['internal'])
         }
       });
 
@@ -293,17 +293,18 @@ module.exports.load = async function (app, db) {
 
       const user = passkey.user;
 
-      // Verify the authentication response with relaxed verification requirements
+      // Verify the authentication response (v10+ API uses 'credential' not 'authenticator')
       const verification = await verifyAuthenticationResponse({
         response: req.body,
         expectedChallenge: req.session.passkeyAuthenticationChallenge,
         expectedOrigin,
         expectedRPID: rpID,
         requireUserVerification: false,
-        authenticator: {
-          credentialID: Buffer.from(passkey.credentialID, 'base64url'),
-          credentialPublicKey: Buffer.from(passkey.credentialPublicKey, 'base64url'),
-          counter: passkey.counter
+        credential: {
+          id: passkey.credentialID,
+          publicKey: Buffer.from(passkey.credentialPublicKey, 'base64url'),
+          counter: passkey.counter,
+          transports: passkey.transports ? JSON.parse(passkey.transports) : ['internal']
         }
       });
 
