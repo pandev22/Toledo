@@ -25,16 +25,20 @@ module.exports.HeliactylModule = HeliactylModule;
 module.exports.load = async function (app, db) {
   const authz = createAuthz(db);
 
-  app.get('/generate', async (req, res) => {
+  app.post('/generate', async (req, res) => {
     if (!authz.hasUserSession(req)) return res.redirect("/login");
     if (!authz.hasPterodactylSession(req)) return res.redirect("/login");
     const sessionUser = authz.getSessionUser(req);
 
-    if (!req.query.code) {
+    const freshUser = await db.user.findUnique({ where: { id: sessionUser.id }, select: { isBanned: true } });
+    if (freshUser?.isBanned) return res.json({ error: "Your account is banned" });
+
+    const code = req.body?.code || req.query?.code;
+    if (!code) {
       return res.json({ error: "No code provided" });
     }
 
-    let referralCode = req.query.code;
+    let referralCode = code;
     // check if the referral code is less than 16 characters and has no spaces
     if (referralCode.length > 15 || referralCode.includes(" ")) {
       return res.json({ error: "Invalid code" });
@@ -70,17 +74,20 @@ module.exports.load = async function (app, db) {
     res.json({ success: "Referral code created" });
   });
 
-  app.get('/claim', async (req, res) => {
+  app.post('/claim', async (req, res) => {
     if (!authz.hasUserSession(req)) return res.redirect("/login");
     if (!authz.hasPterodactylSession(req)) return res.redirect("/login");
     const sessionUser = authz.getSessionUser(req);
 
-    // Get the referral code from the query
-    if (!req.query.code) {
+    const freshUser = await db.user.findUnique({ where: { id: sessionUser.id }, select: { isBanned: true } });
+    if (freshUser?.isBanned) return res.json({ error: "Your account is banned" });
+
+    const code = req.body?.code || req.query?.code;
+    if (!code) {
       return res.json({ error: "No code provided" });
     }
 
-    const referralCode = req.query.code;
+    const referralCode = code;
 
     try {
       const claimResult = await db.$transaction(async (tx) => {
@@ -94,11 +101,15 @@ module.exports.load = async function (app, db) {
         });
 
         if (!referral) {
-          return { error: "Invalid code" };
+          return { error: "Invalid referral code" };
         }
 
         if (referral.userId === sessionUser.id) {
-          return { error: "Cannot claim your own code" };
+          return { error: "You cannot claim your own referral code" };
+        }
+
+        if (referral.claimedById) {
+          return { error: "This referral code has already been used by someone else" };
         }
 
         const alreadyClaimed = await tx.referral.findFirst({
@@ -107,11 +118,21 @@ module.exports.load = async function (app, db) {
         });
 
         if (alreadyClaimed) {
-          return { error: "Already claimed a code" };
+          return { error: "You have already claimed a referral code. Each account can only use one referral code." };
         }
 
-        if (referral.claimedById) {
-          return { error: "Code already claimed" };
+        // Verify referral owner still exists and is not banned
+        const owner = await tx.user.findUnique({
+          where: { id: referral.userId },
+          select: { id: true, isBanned: true }
+        });
+
+        if (!owner) {
+          return { error: "The referral code owner's account no longer exists" };
+        }
+
+        if (owner.isBanned) {
+          return { error: "This referral code is no longer valid" };
         }
 
         // Award the referral bonus atomically
@@ -158,17 +179,20 @@ module.exports.load = async function (app, db) {
       });
 
       if (claimResult.error) {
+        console.warn(`Referral claim rejected: user=${sessionUser.id} code=${referralCode} reason="${claimResult.error}"`);
         return res.json({ error: claimResult.error });
       }
 
+      console.log(`Referral claimed: user=${sessionUser.id} code=${referralCode}`);
       res.json({ success: "Referral code claimed" });
     } catch (error) {
       if (error?.code === 'P2002') {
-        return res.json({ error: "Already claimed a code" });
+        console.warn(`Referral claim P2002 conflict: user=${sessionUser.id} code=${referralCode}`);
+        return res.json({ error: "You have already claimed a referral code. Each account can only use one referral code." });
       }
 
-      console.error("Referral claim error:", error);
-      res.json({ error: "Failed to claim referral code" });
+      console.error(`Referral claim error: user=${sessionUser.id} code=${referralCode}`, error);
+      res.json({ error: "Failed to claim referral code. Please try again." });
     }
   });
 };
