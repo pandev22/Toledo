@@ -499,6 +499,10 @@ module.exports.load = async function (app, db) {
 
       const recipientId = recipient.id;
 
+      if (recipientId === userId) {
+        return res.status(400).json({ error: 'You cannot transfer coins to yourself' });
+      }
+
       await db.$transaction(async (tx) => {
         // Verify sender has enough again inside tx
         const sender = await tx.user.findUnique({ where: { id: userId }, select: { coins: true } });
