@@ -248,7 +248,7 @@ const schemas = {
   // Egg management (admin)
   eggUpdate: z.object({
     displayName: z.string().min(1).max(100).trim().optional(),
-    description: z.string().max(500).trim().optional(),
+    description: z.string().max(5000).trim().optional(),
     category: z.string().min(1).max(50).trim().optional(),
     minimum: z.object({
       ram: z.number().int().min(0),

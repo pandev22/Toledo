@@ -622,6 +622,56 @@ module.exports.load = async function (app, db) {
     }
   });
 
+  // Get coin leaderboard
+  router.get('/billing/leaderboard', async (req, res) => {
+    try {
+      const userId = authz.getSessionUser(req).id;
+
+      // Get top 25 users by coins (exclude banned users)
+      const topUsers = await db.user.findMany({
+        where: { isBanned: false },
+        orderBy: { coins: 'desc' },
+        take: 25,
+        select: { id: true, username: true, coins: true }
+      });
+
+      // Get current user's coins and username
+      const currentUser = await db.user.findUnique({
+        where: { id: userId },
+        select: { coins: true, username: true }
+      });
+
+      // Calculate user's rank (number of non-banned users with more coins + 1)
+      const higherRankCount = await db.user.count({
+        where: { coins: { gt: currentUser.coins }, isBanned: false }
+      });
+      const userRank = higherRankCount + 1;
+
+      // Check if user is in top 25
+      const inTop = topUsers.some(u => u.id === userId);
+
+      // Build leaderboard with rank numbers
+      const leaderboard = topUsers.map((user, index) => ({
+        rank: index + 1,
+        username: user.username,
+        coins: user.coins
+      }));
+
+      res.json({
+        leaderboard,
+        userRank: {
+          rank: userRank,
+          username: currentUser.username,
+          coins: currentUser.coins,
+          inTop
+        }
+      });
+    } catch (error) {
+      console.error('Error fetching leaderboard:', error);
+      res.status(500).json({ error: 'Failed to fetch leaderboard' });
+    }
+  });
+
   // Mount the router
   app.use('/api/v5', router);
 };

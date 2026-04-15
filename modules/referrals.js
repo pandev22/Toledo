@@ -49,6 +49,15 @@ module.exports.load = async function (app, db) {
       return res.json({ error: "Code already exists" });
     }
 
+    // Check if user already has a referral code
+    const userReferral = await db.referral.findUnique({
+      where: { userId: sessionUser.id }
+    });
+
+    if (userReferral) {
+      return res.json({ error: `You already have a referral code [${userReferral.code}]` });
+    }
+
     // Save the referral code
     await db.referral.create({
         data: {

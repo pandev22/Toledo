@@ -562,6 +562,19 @@ module.exports.load = async function (app, db) {
                 }
             }
 
+            // Validate against egg maximums
+            if (eggInfo.maximum) {
+                if (eggInfo.maximum.ram && ram > eggInfo.maximum.ram) {
+                    return res.status(400).json({ error: `Maximum RAM allowed is ${eggInfo.maximum.ram}MB` });
+                }
+                if (eggInfo.maximum.disk && disk > eggInfo.maximum.disk) {
+                    return res.status(400).json({ error: `Maximum disk allowed is ${eggInfo.maximum.disk}MB` });
+                }
+                if (eggInfo.maximum.cpu && cpu > eggInfo.maximum.cpu) {
+                    return res.status(400).json({ error: `Maximum CPU allowed is ${eggInfo.maximum.cpu}%` });
+                }
+            }
+
             // Create server specification
             const serverSpec = {
                 name: name,
@@ -723,7 +736,7 @@ module.exports.load = async function (app, db) {
                     if (dbEggs) {
                         for (const [_, dbEgg] of Object.entries(dbEggs)) {
                             if (dbEgg.pterodactylEggId === server.attributes.egg) {
-                                eggInfo = { minimum: dbEgg.minimum };
+                                eggInfo = { minimum: dbEgg.minimum, maximum: dbEgg.maximum };
                                 break;
                             }
                         }
@@ -742,6 +755,19 @@ module.exports.load = async function (app, db) {
                 }
                 if (cpu < eggInfo.minimum.cpu) {
                     return res.status(400).json({ error: `Minimum CPU required is ${eggInfo.minimum.cpu}%` });
+                }
+            }
+
+            // Validate against egg maximums
+            if (eggInfo?.maximum) {
+                if (eggInfo.maximum.ram && ram > eggInfo.maximum.ram) {
+                    return res.status(400).json({ error: `Maximum RAM allowed is ${eggInfo.maximum.ram}MB` });
+                }
+                if (eggInfo.maximum.disk && disk > eggInfo.maximum.disk) {
+                    return res.status(400).json({ error: `Maximum disk allowed is ${eggInfo.maximum.disk}MB` });
+                }
+                if (eggInfo.maximum.cpu && cpu > eggInfo.maximum.cpu) {
+                    return res.status(400).json({ error: `Maximum CPU allowed is ${eggInfo.maximum.cpu}%` });
                 }
             }
 
