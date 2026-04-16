@@ -381,7 +381,12 @@ module.exports.load = function (app, db) {
         const session = afkManager.sessions.get(userId);
         const duration = session ? Math.round((Date.now() - session.startTime) / 60000) : 0;
         const earned = session ? session.coinsEarned : 0;
-        log('afk_disconnect', `**${sessionUser.username}** ended AFK session\nDuration: **${duration} min**\nCoins earned: **${earned}**`);
+        
+        // Only log if user actually spent time in AFK
+        if (duration > 0 && earned > 0) {
+          log('afk_disconnect', `**${sessionUser.username}** ended AFK session\nDuration: **${duration} min**\nCoins earned: **${earned}**`);
+        }
+        
         afkManager.cleanup(userId);
       });
 
