@@ -13,6 +13,7 @@ const { validate, schemas } = require('../handlers/validate');
 const { adminWriteRateLimit } = require('../handlers/rateLimit');
 const createAuthz = require('../handlers/authz');
 const { getSftpIpMode, setSftpIpMode } = require('../handlers/sftp');
+const { removeServerSubdomains } = require('./server/subdomains.js');
 
 // Pterodactyl API helper
 const pteroApi = axios.create({
@@ -858,6 +859,13 @@ module.exports.load = async function (app, db) {
         `/api/application/servers/${req.params.id}`;
 
       await pteroApi.delete(endpoint);
+
+      try {
+        await removeServerSubdomains(db, req.params.id);
+      } catch (subdomainError) {
+        console.error('Failed to remove server subdomains:', subdomainError);
+      }
+
       res.json({ success: true });
     } catch (error) {
       console.error("Error deleting server:", error);
@@ -1261,6 +1269,10 @@ module.exports.load = async function (app, db) {
         "user banned",
         `${actor?.username || 'staff'} banned ${updatedUser.username}: ${req.body.reason}`
       );
+
+      if (app.afkManager) {
+        app.afkManager.disconnectUser(user.id, 'banned');
+      }
 
       res.json({
         success: true,

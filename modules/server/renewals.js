@@ -3,6 +3,7 @@ const axios = require("axios");
 const loadConfig = require("../../handlers/config");
 const cache = require("../../handlers/cache");
 const { isAuthenticated, ownsServer, PANEL_URL, API_KEY, ADMIN_KEY } = require("./core.js");
+const { removeServerSubdomains } = require("./subdomains.js");
 
 const settings = loadConfig("./config.toml");
 
@@ -464,6 +465,12 @@ async function handleExpiredRecord(db, record, config) {
           throw error;
         }
       }
+    }
+
+    try {
+      await removeServerSubdomains(db, record.serverIdentifier);
+    } catch (subdomainError) {
+      console.error('Failed to remove server subdomains during renewal expiry:', subdomainError);
     }
 
     await removeServerRenewal(db, {

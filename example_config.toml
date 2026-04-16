@@ -155,6 +155,9 @@ webhook = "https://discord.com/api/webhooks/your_webhook_url"
 "radar node deleted" = true
 "coins updated" = true
 "resources updated" = true
+"user banned" = true
+"user unbanned" = true
+"sftp config updated" = true
 
 # ---------------------------------
 # Renewal Configuration
@@ -167,3 +170,17 @@ check_interval_minutes = 5
 auto_delete_enabled = true
 auto_delete_after_days = 7
 api_delay_ms = 1000
+
+# ---------------------------------
+# Cloudflare DNS (Subdomains)
+# ---------------------------------
+[cloudflare]
+api_token = ""
+max_subdomains_per_server = 2
+
+[[cloudflare.domains]]
+enabled = true
+name = "main"
+domain = "example.com"
+zone_id = "your-cloudflare-zone-id"
+is_default = true

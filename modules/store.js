@@ -99,9 +99,10 @@ class AFKRewardsManager {
     return Date.now() - session.lastUpdate < 60000;
   }
 
-  createSession(userId, clusterId) {
+  createSession(userId, clusterId, ws) {
     this.sessions.set(userId, {
       clusterId,
+      ws,
       lastReward: Date.now(),
       lastUpdate: Date.now(),
       startTime: Date.now(),
@@ -119,6 +120,20 @@ class AFKRewardsManager {
 
   removeSession(userId) {
     this.sessions.delete(userId);
+  }
+
+  disconnectUser(userId, reason) {
+    const session = this.sessions.get(userId);
+    if (!session) return false;
+
+    try {
+      if (session.ws && session.ws.readyState === 1) {
+        session.ws.close(4005, reason || 'banned');
+      }
+    } catch {}
+
+    this.cleanup(userId);
+    return true;
   }
 
   async processReward(userId, ws) {
@@ -324,6 +339,8 @@ module.exports.load = function (app, db) {
   const store = new Store(db);
   const authz = createAuthz(db);
 
+  app.afkManager = afkManager;
+
   app.ws('/ws', async function (ws, req) {
     if (!authz.hasUserSession(req)) {
       ws.close(4001, 'Unauthorized');
@@ -352,7 +369,7 @@ module.exports.load = function (app, db) {
         return;
       }
 
-      afkManager.createSession(userId, clusterId);
+      afkManager.createSession(userId, clusterId, ws);
       afkManager.scheduleNextReward(userId, ws);
       afkManager.startStateUpdates(userId, ws);
 

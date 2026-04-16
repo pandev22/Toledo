@@ -10,6 +10,7 @@ const { validate, schemas } = require('../../handlers/validate');
 const createAuthz = require('../../handlers/authz');
 const { ownsServer } = require('./core');
 const { initializeServerRenewal, removeServerRenewal } = require('./renewals.js');
+const { removeServerSubdomains } = require('./subdomains.js');
 const { applySftpIpMode, getSftpIpMode } = require('../../handlers/sftp');
 
 // Dynamic eggs helper - will be initialized in load()
@@ -860,6 +861,12 @@ module.exports.load = async function (app, db) {
 
             // Send delete request to Pterodactyl
             await pteroApi.delete(`/api/application/servers/${serverId}/force`);
+
+            try {
+                await removeServerSubdomains(db, server.attributes.identifier);
+            } catch (subdomainError) {
+                console.error('Failed to remove server subdomains:', subdomainError);
+            }
 
             try {
                 await removeServerRenewal(db, {
