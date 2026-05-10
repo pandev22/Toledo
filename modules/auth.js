@@ -8,6 +8,7 @@ const cache = require('../handlers/cache');
 const log = require('../handlers/log');
 const createAuthz = require('../handlers/authz');
 const createIpCheck = require('../handlers/ipCheck');
+const { getClientIp } = require('../handlers/antiVpnAllowlist');
 const { removeServerRenewal } = require('./server/renewals');
 const { validate, schemas } = require('../handlers/validate');
 const {
@@ -153,6 +154,7 @@ module.exports.load = async function (app, db) {
         id: true,
         username: true,
         email: true,
+        discordId: true,
         pterodactylId: true,
         isBanned: true,
         banReason: true,
@@ -306,7 +308,7 @@ module.exports.load = async function (app, db) {
 
   app.post("/auth/login", loginRateLimit, validate(schemas.authLogin), async (req, res) => {
     const { email, password, remember } = req.body;
-    const clientIp = req.headers['x-forwarded-for']?.split(',')[0] || req.socket.remoteAddress?.replace('::ffff:', '');
+    const clientIp = getClientIp(req);
 
     const user = await getBanAwareUserByEmail(email);
     if (!user) {
@@ -522,6 +524,7 @@ module.exports.load = async function (app, db) {
   // Magic link login verification
   app.get("/auth/magic-login", magicLoginRateLimit, async (req, res) => {
     const { token } = req.query;
+    const clientIp = getClientIp(req);
 
     if (!token) {
       return res.status(400).json({ error: "Token is required" });
@@ -550,6 +553,21 @@ module.exports.load = async function (app, db) {
 
     if (!user) {
       return res.status(404).json({ error: "User not found" });
+    }
+
+    if (clientIp && user.discordId) {
+      const ipCheckResult = await ipCheck.checkAndRecordIp(clientIp, user.discordId, user.id);
+      if (!ipCheckResult.allowed) {
+        req.session.userinfo = {
+          id: user.id,
+          username: user.username,
+          email: user.email,
+          global_name: user.username,
+        };
+
+        const bannedUser = await getBanAwareUser(user.id);
+        return authz.denyBannedRequest(req, res, bannedUser);
+      }
     }
 
     // Create session

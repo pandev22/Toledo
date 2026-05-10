@@ -8,6 +8,7 @@ const settings = loadConfig("./config.toml");
 const log = require("../handlers/log.js");
 const createAuthz = require('../handlers/authz');
 const createIpCheck = require('../handlers/ipCheck');
+const { getClientIp, isUserAllowlisted } = require('../handlers/antiVpnAllowlist');
 
 const HeliactylModule = {
   "name": "Discord OAuth2",
@@ -226,16 +227,7 @@ module.exports.load = async function (app, db) {
 
     delete req.session.oauthState;
 
-    // Get client IP
-    const clientIp = req.headers['x-forwarded-for']?.split(',')[0] || req.socket.remoteAddress?.replace('::ffff:', '');
-    
-    // Check for VPN/proxy
-    if (clientIp) {
-      const vpnResult = await vpnCheck(null, db, clientIp);
-      if (vpnResult.blocked) {
-        return res.redirect('/auth?error=vpn');
-      }
-    }
+    const clientIp = getClientIp(req);
 
     try {
       // Exchange code for access token
@@ -281,6 +273,16 @@ module.exports.load = async function (app, db) {
 
         if (existingEmailUser) {
           return redirectAuthError('discord_email_in_use');
+        }
+      }
+
+      if (clientIp) {
+        const allowlisted = user?.id ? await isUserAllowlisted(db, clientIp, user.id) : false;
+        if (!allowlisted) {
+          const vpnResult = await vpnCheck(null, db, clientIp);
+          if (vpnResult.blocked) {
+            return res.redirect('/auth?error=vpn');
+          }
         }
       }
 

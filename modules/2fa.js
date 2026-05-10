@@ -126,7 +126,7 @@ module.exports.load = async function (app, db) {
   // Verify and enable 2FA
   app.post('/api/2fa/verify', isAuthenticated, validate(schemas.twoFactorVerify), async (req, res) => {
     try {
-      const { token: code, secret } = req.body;
+      const { code, secret } = req.body;
       const userId = authz.getSessionUser(req).id;
 
       if (!secret) {

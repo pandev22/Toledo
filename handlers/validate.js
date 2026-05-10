@@ -8,6 +8,7 @@
  */
 
 const { z } = require('zod');
+const net = require('net');
 
 /**
  * Create validation middleware from Zod schema
@@ -236,6 +237,16 @@ const schemas = {
       .min(1, 'Logo URL cannot be empty')
       .max(500, 'Logo URL cannot exceed 500 characters')
       .regex(/^https?:\/\/.+/, 'Logo must be a valid URL starting with http:// or https://')
+      .trim()
+  }),
+
+  adminAntiVpnAllowlistCreate: z.object({
+    ipAddress: z.string({ required_error: 'IP address is required' })
+      .trim()
+      .refine((value) => net.isIP(value) !== 0, 'IP address must be a valid IPv4 or IPv6 address'),
+    reason: z.string({ required_error: 'Reason is required' })
+      .min(3, 'Reason must be at least 3 characters')
+      .max(1000, 'Reason cannot exceed 1000 characters')
       .trim()
   }),
 

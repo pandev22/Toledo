@@ -85,6 +85,52 @@ model User {
   ticketMessages  TicketMessage[]
   passkeys        Passkey[]
   subdomains      ServerSubdomain[]
+  antiVpnAllowlists AntiVpnAllowlistUser[]
+}
+
+model AntiVpnAllowlist {
+  id                String   @id @default(cuid())
+  ipAddress         String   @unique
+  reason            String
+  createdByUserId   String?
+  createdByUsername String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  users  AntiVpnAllowlistUser[]
+  audits AntiVpnAllowlistAudit[]
+
+  @@index([ipAddress])
+}
+
+model AntiVpnAllowlistUser {
+  id          String   @id @default(cuid())
+  allowlistId String
+  userId      String
+  createdAt   DateTime @default(now())
+
+  allowlist AntiVpnAllowlist @relation(fields: [allowlistId], references: [id], onDelete: Cascade)
+  user      User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([allowlistId, userId])
+  @@index([userId])
+}
+
+model AntiVpnAllowlistAudit {
+  id                String   @id @default(cuid())
+  allowlistId       String?
+  action            String
+  actorUserId       String?
+  actorUsername     String?
+  actorIpAddress    String?
+  oldValue          String?
+  newValue          String?
+  createdAt         DateTime @default(now())
+
+  allowlist AntiVpnAllowlist? @relation(fields: [allowlistId], references: [id], onDelete: SetNull)
+
+  @@index([allowlistId, createdAt])
+  @@index([actorUserId])
 }
 
 model IpHistory {

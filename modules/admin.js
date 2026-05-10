@@ -14,6 +14,7 @@ const { adminWriteRateLimit } = require('../handlers/rateLimit');
 const createAuthz = require('../handlers/authz');
 const { getSftpIpMode, setSftpIpMode } = require('../handlers/sftp');
 const { removeServerSubdomains } = require('./server/subdomains.js');
+const { getClientIp, normalizeIp } = require('../handlers/antiVpnAllowlist');
 
 // Pterodactyl API helper
 const pteroApi = axios.create({
@@ -141,6 +142,33 @@ module.exports.load = async function (app, db) {
       select: banUserSelect,
     });
   };
+
+  const serializeAntiVpnAllowlistEntry = (entry) => ({
+    id: entry.id,
+    ipAddress: entry.ipAddress,
+    reason: entry.reason,
+    createdByUserId: entry.createdByUserId,
+    createdByUsername: entry.createdByUsername,
+    createdAt: entry.createdAt,
+    updatedAt: entry.updatedAt,
+    users: (entry.users || []).map((link) => ({
+      id: link.user?.id || link.userId,
+      username: link.user?.username || 'Unknown',
+      email: link.user?.email || null,
+      pterodactylId: link.user?.pterodactylId || null,
+      linkedAt: link.createdAt,
+    })),
+    audits: (entry.audits || []).map((audit) => ({
+      id: audit.id,
+      action: audit.action,
+      actorUserId: audit.actorUserId,
+      actorUsername: audit.actorUsername,
+      actorIpAddress: audit.actorIpAddress,
+      oldValue: audit.oldValue ? JSON.parse(audit.oldValue) : null,
+      newValue: audit.newValue ? JSON.parse(audit.newValue) : null,
+      createdAt: audit.createdAt,
+    })),
+  });
 
   // New /api/admin endpoint
   app.get("/api/admin", async (req, res) => {
@@ -1009,6 +1037,213 @@ module.exports.load = async function (app, db) {
         return res.status(error.response.status).json(error.response.data);
       }
       console.error("Error deleting user:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  app.get("/api/users/:id/anti-vpn-allowlist", async (req, res) => {
+    if (!await checkAdmin(req)) {
+      return res.status(403).json({ error: "Unauthorized" });
+    }
+
+    try {
+      const user = await resolveLocalUser(req.params.id);
+      if (!user) {
+        return res.status(404).json({ error: "User not found" });
+      }
+
+      const entries = await db.antiVpnAllowlist.findMany({
+        where: {
+          users: {
+            some: { userId: user.id }
+          }
+        },
+        include: {
+          users: {
+            include: {
+              user: {
+                select: { id: true, username: true, email: true, pterodactylId: true }
+              }
+            },
+            orderBy: { createdAt: 'asc' }
+          },
+          audits: {
+            orderBy: { createdAt: 'desc' },
+            take: 50
+          }
+        },
+        orderBy: { updatedAt: 'desc' }
+      });
+
+      res.json({ user, entries: entries.map(serializeAntiVpnAllowlistEntry) });
+    } catch (error) {
+      console.error("Error fetching anti-VPN allowlist:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  app.post("/api/users/:id/anti-vpn-allowlist", adminWriteRateLimit, validate(schemas.adminAntiVpnAllowlistCreate), async (req, res) => {
+    if (!await checkAdmin(req)) {
+      return res.status(403).json({ error: "Unauthorized" });
+    }
+
+    try {
+      const user = await resolveLocalUser(req.params.id);
+      if (!user) {
+        return res.status(404).json({ error: "User not found" });
+      }
+
+      const actor = authz.getSessionUser(req);
+      const actorIp = getClientIp(req);
+      const ipAddress = normalizeIp(req.body.ipAddress);
+      if (!ipAddress) {
+        return res.status(400).json({ error: "IP address must be a valid IPv4 or IPv6 address" });
+      }
+
+      const entry = await db.$transaction(async (tx) => {
+        const existingEntry = await tx.antiVpnAllowlist.findUnique({
+          where: { ipAddress },
+          include: {
+            users: true
+          }
+        });
+
+        const allowlist = await tx.antiVpnAllowlist.upsert({
+          where: { ipAddress },
+          update: {
+            reason: req.body.reason
+          },
+          create: {
+            ipAddress,
+            reason: req.body.reason,
+            createdByUserId: actor?.id || null,
+            createdByUsername: actor?.username || null
+          }
+        });
+
+        await tx.antiVpnAllowlistUser.upsert({
+          where: {
+            allowlistId_userId: {
+              allowlistId: allowlist.id,
+              userId: user.id
+            }
+          },
+          update: {},
+          create: {
+            allowlistId: allowlist.id,
+            userId: user.id
+          }
+        });
+
+        const alreadyLinked = existingEntry?.users?.some((link) => link.userId === user.id) === true;
+        await tx.antiVpnAllowlistAudit.create({
+          data: {
+            allowlistId: allowlist.id,
+            action: existingEntry ? (alreadyLinked ? 'update' : 'link') : 'create',
+            actorUserId: actor?.id || null,
+            actorUsername: actor?.username || null,
+            actorIpAddress: actorIp,
+            oldValue: existingEntry ? JSON.stringify({
+              ipAddress: existingEntry.ipAddress,
+              reason: existingEntry.reason,
+              linkedUserIds: existingEntry.users.map((link) => link.userId)
+            }) : null,
+            newValue: JSON.stringify({
+              ipAddress,
+              reason: req.body.reason,
+              linkedUserId: user.id
+            })
+          }
+        });
+
+        return tx.antiVpnAllowlist.findUnique({
+          where: { id: allowlist.id },
+          include: {
+            users: {
+              include: {
+                user: {
+                  select: { id: true, username: true, email: true, pterodactylId: true }
+                }
+              },
+              orderBy: { createdAt: 'asc' }
+            },
+            audits: {
+              orderBy: { createdAt: 'desc' },
+              take: 50
+            }
+          }
+        });
+      });
+
+      log(
+        "anti-vpn allowlist updated",
+        `${actor?.username || 'staff'} allowed IP ${ipAddress} for ${user.username}: ${req.body.reason}`
+      );
+
+      res.status(201).json({ entry: serializeAntiVpnAllowlistEntry(entry) });
+    } catch (error) {
+      console.error("Error updating anti-VPN allowlist:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  app.delete("/api/users/:id/anti-vpn-allowlist/:entryId", adminWriteRateLimit, async (req, res) => {
+    if (!await checkAdmin(req)) {
+      return res.status(403).json({ error: "Unauthorized" });
+    }
+
+    try {
+      const user = await resolveLocalUser(req.params.id);
+      if (!user) {
+        return res.status(404).json({ error: "User not found" });
+      }
+
+      const actor = authz.getSessionUser(req);
+      const actorIp = getClientIp(req);
+      const entry = await db.antiVpnAllowlist.findUnique({
+        where: { id: req.params.entryId },
+        include: { users: true }
+      });
+
+      if (!entry || !entry.users.some((link) => link.userId === user.id)) {
+        return res.status(404).json({ error: "Allowlist entry not found for this user" });
+      }
+
+      await db.$transaction([
+        db.antiVpnAllowlistUser.deleteMany({
+          where: {
+            allowlistId: entry.id,
+            userId: user.id
+          }
+        }),
+        db.antiVpnAllowlistAudit.create({
+          data: {
+            allowlistId: entry.id,
+            action: 'unlink',
+            actorUserId: actor?.id || null,
+            actorUsername: actor?.username || null,
+            actorIpAddress: actorIp,
+            oldValue: JSON.stringify({
+              ipAddress: entry.ipAddress,
+              reason: entry.reason,
+              linkedUserIds: entry.users.map((link) => link.userId)
+            }),
+            newValue: JSON.stringify({
+              ipAddress: entry.ipAddress,
+              unlinkedUserId: user.id
+            })
+          }
+        })
+      ]);
+
+      log(
+        "anti-vpn allowlist removed",
+        `${actor?.username || 'staff'} removed IP ${entry.ipAddress} from ${user.username}`
+      );
+
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error removing anti-VPN allowlist entry:", error);
       res.status(500).json({ error: "Internal server error" });
     }
   });

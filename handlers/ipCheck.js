@@ -1,5 +1,6 @@
 const AUTO_BAN_REASON = 'Suspicious login detected: this IP address is already associated with a different Discord account.';
 const AUTO_BAN_ACTOR = 'System (IP mismatch check)';
+const { normalizeIp, isUserAllowlisted } = require('./antiVpnAllowlist');
 
 function buildAutoBanReason({ userId, discordId, conflictingUserId, conflictingDiscordId, ipAddress }) {
   const details = [
@@ -19,9 +20,13 @@ function createIpCheck(db) {
       return { allowed: true };
     }
 
-    const normalizedIp = String(clientIp).trim();
+    const normalizedIp = normalizeIp(clientIp);
     if (!normalizedIp) {
       return { allowed: true };
+    }
+
+    if (await isUserAllowlisted(db, normalizedIp, userId)) {
+      return { allowed: true, allowlistBypassed: true };
     }
 
     const existingRecord = await db.ipHistory.findFirst({
