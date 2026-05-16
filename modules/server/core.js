@@ -288,7 +288,12 @@ async function withServerWebSocket(serverId, callback) {
       });
 
       ws.on('message', async (data) => {
-        const message = JSON.parse(data.toString());
+        let message;
+        try {
+          message = JSON.parse(data.toString());
+        } catch {
+          return;
+        }
 
         if (message.event === 'auth success') {
           if (callbackStarted) {

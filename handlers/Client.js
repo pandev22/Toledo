@@ -55,7 +55,13 @@ class PterodactylClientModule {
       });
 
       this.socket.on('message', (data) => {
-        const message = JSON.parse(data);
+        let message;
+        try {
+          message = JSON.parse(data);
+        } catch {
+          console.error('Invalid WebSocket message:', data.toString());
+          return;
+        }
         this.handleWebSocketMessage(message);
       });
 
