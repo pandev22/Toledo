@@ -17,15 +17,15 @@ module.exports = async (key, db, ip, res) => {
   
   if (!ipcache) {
     try {
-      const response = await axios.get(`https://api.ipapi.is/?q=${ip}`, {
+      const response = await axios.get(`https://api.ippriv.com/api/security/${ip}`, {
         timeout: 5000
       });
       
       const data = response.data;
       
       if (data) {
-        // Check if VPN, proxy, datacenter, Tor, or abusive IP
-        if (data.is_vpn === true || data.is_proxy === true || data.is_datacenter === true || data.is_tor === true || data.is_abuser === true) {
+        // Check if VPN, proxy, Tor, or hosting/datacenter IP
+        if (data.isVPN === true || data.isProxy === true || data.isTor === true || data.isHosting === true) {
           ipcache = "yes";
         } else {
           ipcache = "no";
@@ -33,7 +33,7 @@ module.exports = async (key, db, ip, res) => {
       }
     } catch (error) {
       // Silently fail - allow request if check fails
-      return false;
+      return { blocked: false, ip: ip };
     }
   }
   
