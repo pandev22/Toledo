@@ -1,4 +1,3 @@
-const indexjs = require("../app.js");
 const fs = require("fs");
 const loadConfig = require("../handlers/config.js");
 const settings = loadConfig("./config.toml");
