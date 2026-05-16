@@ -496,7 +496,13 @@ module.exports.load = function (app, db) {
       const { resourceType, amount } = req.body;
 
       const cost = RESOURCE_PRICES[resourceType] * amount;
-      const user = await db.user.findUnique({ where: { id: userId }, select: { coins: true } });
+
+      const fieldMap = { ram: 'extraRam', disk: 'extraDisk', cpu: 'extraCpu', servers: 'extraServers' };
+      const field = fieldMap[resourceType];
+      const actualAmount = amount * RESOURCE_MULTIPLIERS[resourceType];
+
+      // Pre-check balance and resource limits
+      const user = await db.user.findUnique({ where: { id: userId }, select: { coins: true, [field]: true } });
       const userCoins = user?.coins ?? 0;
 
       if (userCoins < cost) {
@@ -507,21 +513,36 @@ module.exports.load = function (app, db) {
         });
       }
 
-      const updatedResources = await store.updateResourceLimits(userId, resourceType, amount);
-      const newBalance = userCoins - cost;
-      
-      await db.user.update({
-        where: { id: userId },
-        data: { coins: newBalance }
-      });
+      const currentResource = user?.[field] ?? 0;
+      const maxLimit = MAX_RESOURCE_LIMITS[resourceType] * RESOURCE_MULTIPLIERS[resourceType];
+      if (currentResource + actualAmount > maxLimit) {
+        return res.status(400).json({ error: 'Resource limit exceeded', code: 'RESOURCE_LIMIT_EXCEEDED' });
+      }
+
+      // Atomic transaction: deduct coins + increment resource
+      const [updatedUser] = await db.$transaction([
+        db.user.update({
+          where: { id: userId },
+          data: { coins: { decrement: cost } }
+        }),
+        db.user.update({
+          where: { id: userId },
+          data: { [field]: { increment: actualAmount } }
+        })
+      ]);
 
       const purchase = await store.logPurchase(userId, resourceType, amount, cost);
 
       res.json({
         success: true,
         purchase,
-        resources: updatedResources,
-        remainingCoins: newBalance
+        resources: {
+          ram: updatedUser.extraRam,
+          disk: updatedUser.extraDisk,
+          cpu: updatedUser.extraCpu,
+          servers: updatedUser.extraServers
+        },
+        remainingCoins: updatedUser.coins
       });
 
     } catch (error) {
