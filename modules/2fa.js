@@ -5,6 +5,7 @@ const qrcode = require('qrcode');
 const axios = require('axios');
 const loadConfig = require("../handlers/config.js");
 const settings = loadConfig("./config.toml");
+const { getClientIp } = require('../handlers/antiVpnAllowlist');
 const { validate, schemas } = require('../handlers/validate');
 const createAuthz = require('../handlers/authz');
 
@@ -307,6 +308,7 @@ module.exports.load = async function (app, db) {
           email: user.email,
           global_name: user.username
         };
+        req.session.sessionIp = getClientIp(req);
 
         const banRecord = await authz.getFreshSessionUserRecord(req);
         if (authz.isUserBanned(banRecord)) {
@@ -341,6 +343,7 @@ module.exports.load = async function (app, db) {
         email: user.email,
         global_name: user.username
       };
+      req.session.sessionIp = getClientIp(req);
 
       const banRecord = await authz.getFreshSessionUserRecord(req);
       if (authz.isUserBanned(banRecord)) {

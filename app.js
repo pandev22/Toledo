@@ -82,6 +82,9 @@ app.use((req, res, next) => {
 const authz = createAuthz(db);
 app.use(authz.enforceBanPolicy);
 
+const createSessionIpCheck = require("./handlers/sessionIpCheck");
+app.use(createSessionIpCheck());
+
 const moduleExports = { app, db, VERSION, PLATFORM_CODENAME, API_LEVEL };
 module.exports = moduleExports;
 global.__rootdir = __dirname;

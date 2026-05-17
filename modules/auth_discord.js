@@ -384,6 +384,7 @@ module.exports.load = async function (app, db) {
         email: user.email,
         global_name: userData.global_name || userData.username
       };
+      req.session.sessionIp = clientIp;
 
       const banRecord = await authz.getFreshSessionUserRecord(req);
       if (authz.isUserBanned(banRecord)) {

@@ -4,6 +4,7 @@ const loadConfig = require("../handlers/config.js");
 const settings = loadConfig("./config.toml");
 const { validate, schemas } = require('../handlers/validate');
 const createAuthz = require('../handlers/authz');
+const { getClientIp } = require('../handlers/antiVpnAllowlist');
 
 const HeliactylModule = {
   "name": "Passkeys",
@@ -328,6 +329,7 @@ module.exports.load = async function (app, db) {
         email: user.email,
         global_name: user.username // User model doesn't have global_name, using username
       };
+      req.session.sessionIp = getClientIp(req);
 
       const banRecord = await authz.getFreshSessionUserRecord(req);
       if (authz.isUserBanned(banRecord)) {

@@ -330,6 +330,7 @@ module.exports.load = async function (app, db) {
 
     // Create session
     setSessionUser(req, user);
+    req.session.sessionIp = clientIp;
 
     if (authz.isUserBanned(user)) {
       return authz.denyBannedRequest(req, res, user, { forceJson: true });
@@ -572,6 +573,7 @@ module.exports.load = async function (app, db) {
 
     // Create session
     setSessionUser(req, user);
+    req.session.sessionIp = clientIp;
 
     if (authz.isUserBanned(user)) {
       return authz.denyBannedRequest(req, res, user);
