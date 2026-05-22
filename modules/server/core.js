@@ -78,10 +78,52 @@ const isAuthenticated = (req, res, next) => {
   return authzHandler.requirePterodactylSession(req, res, next);
 };
 
+// Normalize server IDs for comparison
+const normalizeId = (id) => {
+  if (id === null || id === undefined) return '';
+  const value = String(id);
+  return value.includes('-') ? value.split('-')[0] : value;
+};
+
+// Check if a Pterodactyl user is the actual owner of a server via Application API
+// Returns true/false. On API failure, logs and returns false.
+// Uses serverCache (60s TTL) - same cache as isServerOwner middleware.
+async function checkIsServerOwner(pteroUser, serverId) {
+  const normalizedTargetId = normalizeId(serverId);
+  const cacheKey = `user_servers_${pteroUser.id}`;
+  let ownedServers = serverCache.get(cacheKey);
+
+  if (!ownedServers) {
+    const userResponse = await axios.get(
+      `${PANEL_URL}/api/application/users/${pteroUser.id}?include=servers`,
+      {
+        headers: {
+          Authorization: `Bearer ${ADMIN_KEY}`,
+          Accept: 'application/json',
+        },
+      }
+    );
+    ownedServers = userResponse.data.attributes.relationships.servers.data;
+    serverCache.set(cacheKey, ownedServers);
+  }
+
+  return ownedServers.some(s => {
+    const internalId = normalizeId(s.attributes?.id);
+    const identifier = normalizeId(s.attributes?.identifier);
+    return internalId === normalizedTargetId || identifier === normalizedTargetId;
+  });
+}
+
+// Invalidate the ownership cache for a given user
+async function invalidateOwnershipCache(pteroUserId) {
+  serverCache.del(`user_servers_${pteroUserId}`);
+}
+
 // Fixed enhancedOwnsServer middleware with fresh Pterodactyl data
+// Passes both server owners AND subusers (subusers can view/use the server)
 const ownsServer = async (req, res, next) => {
   try {
-    const serverId = req.params.id || req.params.serverId || req.params.instanceId || req.query.id;
+    const serverId = req.params.id || req.params.serverId || req.params.instanceId || req.params.idOrIdentifier || req.query.id;
     if (!serverId) {
       return res.status(400).json({ error: 'No server ID provided' });
     }
@@ -99,43 +141,12 @@ const ownsServer = async (req, res, next) => {
     const pteroUser = authzHandler.getPterodactylUser(req);
     const sessionUser = authzHandler.getSessionUser(req);
 
-    // Normalize IDs for comparison
-    const normalizeId = (id) => {
-      if (id === null || id === undefined) return '';
-      const value = String(id);
-      return value.includes('-') ? value.split('-')[0] : value;
-    };
-
     const normalizedTargetId = normalizeId(serverId);
 
-    // FIRST CHECK: Get fresh data from Pterodactyl API instead of using session data
+    // FIRST CHECK: Verify ownership via Pterodactyl Application API
     let isOwner = false;
     try {
-        const cacheKey = `user_servers_${pteroUser.id}`;
-      let ownedServers = serverCache.get(cacheKey);
-
-      if (!ownedServers) {
-        // Get user's servers directly from Pterodactyl
-        const userResponse = await axios.get(
-          `${PANEL_URL}/api/application/users/${pteroUser.id}?include=servers`,
-          {
-            headers: {
-              'Authorization': `Bearer ${ADMIN_KEY}`,
-              'Accept': 'application/json',
-            },
-          }
-        );
-        ownedServers = userResponse.data.attributes.relationships.servers.data;
-        serverCache.set(cacheKey, ownedServers);
-      }
-
-      // Check if user owns the server directly
-      isOwner = ownedServers.some(s => {
-        const internalId = normalizeId(s.attributes?.id);
-        const identifier = normalizeId(s.attributes?.identifier);
-
-        return internalId === normalizedTargetId || identifier === normalizedTargetId;
-      });
+      isOwner = await checkIsServerOwner(pteroUser, serverId);
     } catch (error) {
       console.error('Error fetching fresh server data from Pterodactyl:', error);
       // Continue with other checks even if this one fails
@@ -148,7 +159,7 @@ const ownsServer = async (req, res, next) => {
     // FORCE CHECK
     try {
       const forced = await db.subuserServer.findFirst({ where: { serverId, source: 'forced' } });
-        if (forced && forced.userId === sessionUser.id) {
+      if (forced && forced.userId === sessionUser.id) {
         return next();
       }
     } catch (error) {
@@ -245,6 +256,47 @@ const ownsServer = async (req, res, next) => {
     return res.status(500).json({ error: 'Internal server error while checking server access' });
   }
 };
+
+// Middleware that only allows the actual server owner (rejects subusers)
+const isServerOwner = async (req, res, next) => {
+  try {
+    const serverId = req.params.id || req.params.serverId || req.params.instanceId || req.params.idOrIdentifier || req.query.id;
+    if (!serverId) {
+      return res.status(400).json({ error: 'No server ID provided' });
+    }
+
+    const authzHandler = ensureAuthz();
+
+    if (!authzHandler) {
+      return res.status(500).json({ error: 'Authentication handler is not initialized' });
+    }
+
+    if (!authzHandler.hasPterodactylSession(req) || !authzHandler.hasUserSession(req)) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const pteroUser = authzHandler.getPterodactylUser(req);
+
+    let isOwner = false;
+    try {
+      isOwner = await checkIsServerOwner(pteroUser, serverId);
+    } catch (error) {
+      console.error('Error verifying server ownership:', error);
+      // On API failure, deny access rather than returning 500
+      return res.status(403).json({ error: 'Only the server owner can perform this action' });
+    }
+
+    if (!isOwner) {
+      return res.status(403).json({ error: 'Only the server owner can perform this action' });
+    }
+
+    next();
+  } catch (error) {
+    console.error('Error in isServerOwner middleware:', error);
+    return res.status(500).json({ error: 'Internal server error while checking server ownership' });
+  }
+};
+
 
 
 // WebSocket helper function
@@ -402,6 +454,9 @@ module.exports = {
   load: module.exports.load,
   isAuthenticated,
   ownsServer,
+  isServerOwner,
+  checkIsServerOwner,
+  invalidateOwnershipCache,
   invalidateServerAccessCache,
   withServerWebSocket,
   sendCommandAndGetResponse,

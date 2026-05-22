@@ -8,7 +8,7 @@ const log = require('../../handlers/log');
 const cache = require('../../handlers/cache');
 const { validate, schemas } = require('../../handlers/validate');
 const createAuthz = require('../../handlers/authz');
-const { ownsServer } = require('./core');
+const { ownsServer, isServerOwner, checkIsServerOwner, invalidateOwnershipCache } = require('./core');
 const { initializeServerRenewal, removeServerRenewal } = require('./renewals.js');
 const { removeServerSubdomains } = require('./subdomains.js');
 const { applySftpIpMode, getSftpIpMode } = require('../../handlers/sftp');
@@ -390,6 +390,7 @@ module.exports.load = async function (app, db) {
     router.get('/server/:id', ownsServer, async (req, res) => {
         try {
             const sessionUser = authz.getSessionUser(req);
+            const pteroUser = authz.getPterodactylUser(req);
             const user = await cache.getOrSet(
                 `ptero:user:${sessionUser.id}:servers`,
                 () => getPteroUser(sessionUser.id, db),
@@ -399,6 +400,14 @@ module.exports.load = async function (app, db) {
                 s => s.attributes.id === req.params.id || s.attributes.identifier === req.params.id
             );
             const serverIdentifier = server?.attributes?.identifier || req.params.id;
+
+            // Ownership check via 60s Application API cache (consistent with isServerOwner middleware)
+            let isOwner = false;
+            try {
+                isOwner = await checkIsServerOwner(pteroUser, req.params.id);
+            } catch (error) {
+                console.error('Error checking server ownership:', error);
+            }
 
             const [serverDetailsResponse, sftpMode] = await Promise.all([
                 pteroClientApi.get(`/api/client/servers/${serverIdentifier}`, {
@@ -414,7 +423,11 @@ module.exports.load = async function (app, db) {
 
             res.json({
                 ...serverDetails,
-                attributes: applySftpIpMode(detailedAttributes, sftpMode)
+                attributes: applySftpIpMode(detailedAttributes, sftpMode),
+                meta: {
+                    ...(serverDetails.meta || {}),
+                    isOwner
+                }
             });
         } catch (error) {
             console.error('Error fetching server:', error);
@@ -800,7 +813,7 @@ module.exports.load = async function (app, db) {
     });
 
     // DELETE /api/v5/servers/:idOrIdentifier - Delete server
-    router.delete('/servers/:idOrIdentifier', async (req, res) => {
+    router.delete('/servers/:idOrIdentifier', isServerOwner, async (req, res) => {
         try {
             const sessionUser = authz.getSessionUser(req);
 
@@ -849,7 +862,7 @@ module.exports.load = async function (app, db) {
             }
 
             if (!server || !serverId) {
-                return res.status(404).json({ error: 'Server not found or not owned by you' });
+                return res.status(404).json({ error: 'Server not found' });
             }
 
             // Check if server is suspended
@@ -882,8 +895,9 @@ module.exports.load = async function (app, db) {
                 `User ${sessionUser.username} deleted server "${server.attributes.name}"`
             );
 
-            // Invalidate user servers cache
+            // Invalidate user servers caches
             await cache.del(`ptero:user:${sessionUser.id}:servers`);
+            invalidateOwnershipCache(sessionUser.id);
 
             res.status(204).send();
         } catch (error) {
