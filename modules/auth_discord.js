@@ -385,6 +385,8 @@ module.exports.load = async function (app, db) {
         global_name: userData.global_name || userData.username
       };
       req.session.sessionIp = clientIp;
+      req.session.userAgent = req.headers['user-agent'] || '';
+      req.session.createdAt = Date.now();
 
       const banRecord = await authz.getFreshSessionUserRecord(req);
       if (authz.isUserBanned(banRecord)) {
