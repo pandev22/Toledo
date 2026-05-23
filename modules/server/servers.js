@@ -890,6 +890,14 @@ module.exports.load = async function (app, db) {
                 console.error('Failed to remove server renewal:', renewalError);
             }
 
+            try {
+                await db.subuserServer.deleteMany({
+                    where: { serverId: server.attributes.identifier }
+                });
+            } catch (subuserError) {
+                console.error('Failed to remove server subusers:', subuserError);
+            }
+
             // Log the deletion
             log('server_deleted',
                 `User ${sessionUser.username} deleted server "${server.attributes.name}"`

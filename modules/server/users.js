@@ -202,6 +202,13 @@ module.exports.load = async function (app, _db) {
           },
         }
       );
+
+      // Remove the subuserServer record then re-sync from panel
+      await db.subuserServer.deleteMany({
+        where: { serverId, source: 'subuser' }
+      });
+      await updateSubuserInfo(serverId, authz.getSessionUser(req).id);
+
       invalidateServerAccessCache(serverId);
       await recordServerActivity(db, req, serverId, 'user.delete', {
         userId,

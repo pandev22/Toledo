@@ -473,6 +473,14 @@ async function handleExpiredRecord(db, record, config) {
       console.error('Failed to remove server subdomains during renewal expiry:', subdomainError);
     }
 
+    try {
+      await db.subuserServer.deleteMany({
+        where: { serverId: record.serverIdentifier }
+      });
+    } catch (subuserError) {
+      console.error('Failed to remove server subusers during renewal expiry:', subuserError);
+    }
+
     await removeServerRenewal(db, {
       identifier: record.serverIdentifier,
       panelId: record.panelId
