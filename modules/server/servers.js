@@ -385,7 +385,7 @@ module.exports.load = async function (app, db) {
         }
     });
 
-    // GET /api/servers/:id - Get specific server
+    // GET /api/v5/server/:id - Get specific server
     
     router.get('/server/:id', ownsServer, async (req, res) => {
         try {

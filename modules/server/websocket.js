@@ -66,30 +66,5 @@ module.exports.load = async function (app, db) {
     }
   });
 
-  // GET /api/server/:id - Get server details (needed for console)
-  router.get("/server/:id", isAuthenticated, ownsServer, async (req, res) => {
-    try {
-      const serverId = req.params.id;
-      const [response, sftpMode] = await Promise.all([
-        axios.get(
-          `${PANEL_URL}/api/client/servers/${serverId}?include=allocations`,
-          {
-            headers: {
-              Authorization: `Bearer ${API_KEY}`,
-              Accept: "application/json",
-              "Content-Type": "application/json",
-            },
-          }
-        ),
-        getSftpIpMode(db),
-      ]);
-
-      res.json(applySftpIpMode(response.data, sftpMode));
-    } catch (error) {
-      console.error("Error fetching server details:", error);
-      res.status(500).json({ error: "Internal server error" });
-    }
-  });
-
   app.use("/api", router);
 };
