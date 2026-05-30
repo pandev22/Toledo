@@ -299,44 +299,45 @@ const isServerOwner = async (req, res, next) => {
 
 
 
-// WebSocket helper function
-async function withServerWebSocket(serverId, callback) {
+// WebSocket helper function with retry
+async function withServerWebSocket(serverId, callback, retries = 2) {
   let ws = null;
-  try {
-    // Get WebSocket credentials
-    const credsResponse = await fetchWebSocketCredentials({
-      serverId,
-      panelUrl: PANEL_URL,
-      apiKey: API_KEY,
-    });
-
-    const { socket, token } = credsResponse.data;
-
-    // Connect to WebSocket
-    return new Promise((resolve, reject) => {
-      ws = new WebSocket(socket);
-      const timeout = setTimeout(() => {
-        if (ws.readyState !== WebSocket.CLOSED) {
-          ws.close();
-        }
-        reject(new Error('WebSocket operation timed out'));
-      }, 10000); // 10 second timeout
-
-      let consoleBuffer = [];
-      let authenticated = false;
-      let callbackStarted = false;
-
-      ws.on('error', (error) => {
-        clearTimeout(timeout);
-        reject(error);
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      // Get WebSocket credentials
+      const credsResponse = await fetchWebSocketCredentials({
+        serverId,
+        panelUrl: PANEL_URL,
+        apiKey: API_KEY,
       });
 
-      ws.on('open', () => {
-        // Authenticate
-        ws.send(JSON.stringify({
-          event: "auth",
-          args: [token]
-        }));
+      const { socket, token } = credsResponse.data;
+
+      // Connect to WebSocket
+      return await new Promise((resolve, reject) => {
+        ws = new WebSocket(socket);
+        const timeout = setTimeout(() => {
+          if (ws.readyState !== WebSocket.CLOSED) {
+            ws.close();
+          }
+          reject(new Error('WebSocket operation timed out'));
+        }, 10000); // 10 second timeout
+
+        let consoleBuffer = [];
+        let authenticated = false;
+        let callbackStarted = false;
+
+        ws.on('error', (error) => {
+          clearTimeout(timeout);
+          reject(error);
+        });
+
+        ws.on('open', () => {
+          // Authenticate
+          ws.send(JSON.stringify({
+            event: "auth",
+            args: [token]
+          }));
       });
 
       ws.on('message', async (data) => {
@@ -389,13 +390,20 @@ async function withServerWebSocket(serverId, callback) {
         }
       });
     });
-  } catch (error) {
-    console.error(`WebSocket error for server ${serverId}:`, error);
-    throw error;
-  } finally {
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.close();
+    } catch (error) {
+      if (attempt < retries) {
+        console.warn(`WebSocket attempt ${attempt + 1}/${retries + 1} failed for server ${serverId}, retrying...`);
+        await new Promise(r => setTimeout(r, 1000 * Math.pow(2, attempt)));
+        continue;
+      }
+      console.error(`WebSocket failed after ${retries + 1} attempts for server ${serverId}:`, error);
+      throw error;
+    } finally {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.close();
+      }
     }
+    break;
   }
 }
 

@@ -38,8 +38,28 @@ module.exports.load = async function (app, db) {
   // PUT /api/server/:id/startup - Update startup configuration
   router.put('/server/:serverId/startup', isAuthenticated, ownsServer, validate(schemas.serverStartup), async (req, res) => {
     try {
-      const serverId = req.params.serverId;
+      let serverId = req.params.serverId;
       const { startup, environment, egg, image, skip_scripts } = req.body;
+
+      // Resolve UUID to internal ID if needed
+      if (!/^\d+$/.test(String(serverId))) {
+        const listResponse = await axios.get(
+          `${PANEL_URL}/api/application/servers?per_page=100000`,
+          {
+            headers: {
+              'Authorization': `Bearer ${ADMIN_KEY}`,
+              'Accept': 'application/json',
+            }
+          }
+        );
+        const matchingServer = listResponse.data.data.find(s => 
+          s.attributes.identifier === serverId || s.attributes.uuid === serverId
+        );
+        if (!matchingServer) {
+          return res.status(404).json({ error: 'Server not found' });
+        }
+        serverId = matchingServer.attributes.id;
+      }
 
       // First, get the current server details
       const serverDetailsResponse = await axios.get(
