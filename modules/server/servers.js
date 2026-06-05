@@ -85,11 +85,11 @@ async function checkUserResources(userId, db, additionalResources = { ram: 0, di
     const packageConfig = settings.api.client.packages.list[packageName || settings.api.client.packages.default];
     const extra = userRecord ? { ram: userRecord.extraRam, disk: userRecord.extraDisk, cpu: userRecord.extraCpu, servers: userRecord.extraServers } : { ram: 0, disk: 0, cpu: 0, servers: 0 };
 
-    // Use cache for Pterodactyl user data (5 minutes TTL)
+    // Use cache for Pterodactyl user data (15 seconds TTL)
     const userServers = await cache.getOrSet(
         `ptero:user:${userId}:servers`,
         () => getPteroUser(userId, db),
-        300
+        15
     );
     if (!userServers) throw new Error('Failed to fetch user servers');
 
@@ -368,7 +368,7 @@ module.exports.load = async function (app, db) {
             const user = await cache.getOrSet(
                 `ptero:user:${sessionUser.id}:servers`,
                 () => getPteroUser(sessionUser.id, db),
-                300
+                15
             );
             if (!user) {
                 return res.status(404).json({ error: 'User not found' });
@@ -442,12 +442,8 @@ module.exports.load = async function (app, db) {
 
             const { name, egg, nodeId, ram, disk, cpu } = req.body;
 
-            // Get user's current resource usage and limits (with cache)
-            const user = await cache.getOrSet(
-                `ptero:user:${sessionUser.id}:servers`,
-                () => getPteroUser(sessionUser.id, db),
-                300
-            );
+            // Get user's current resource usage and limits (fresh, no cache for resource check)
+            const user = await getPteroUser(sessionUser.id, db);
             const userRecord = await db.user.findUnique({ where: { id: sessionUser.id }, select: { packageName: true, extraRam: true, extraDisk: true, extraCpu: true, extraServers: true, pterodactylId: true } });
             const packageName = userRecord?.packageName;
             const packageConfig = settings.api.client.packages.list[packageName || settings.api.client.packages.default];
@@ -633,8 +629,21 @@ module.exports.load = async function (app, db) {
                 `(RAM: ${ram}MB, CPU: ${cpu}%, Disk: ${disk}MB)`
             );
 
-            // Invalidate user servers cache
-            await cache.del(`ptero:user:${sessionUser.id}:servers`);
+            // Update user servers cache with the new server details to prevent reload race conditions
+            try {
+                const cachedUser = await cache.get(`ptero:user:${sessionUser.id}:servers`);
+                if (cachedUser && cachedUser.attributes?.relationships?.servers?.data) {
+                    cachedUser.attributes.relationships.servers.data.push(response.data);
+                    await cache.set(`ptero:user:${sessionUser.id}:servers`, cachedUser, 15);
+                } else {
+                    await cache.del(`ptero:user:${sessionUser.id}:servers`);
+                }
+            } catch (cacheError) {
+                await cache.del(`ptero:user:${sessionUser.id}:servers`);
+            }
+
+            // Invalidate ownership cache
+            invalidateOwnershipCache(sessionUser.id);
 
             res.status(201).json(response.data);
         } catch (error) {
@@ -655,12 +664,8 @@ module.exports.load = async function (app, db) {
             const { ram, disk, cpu } = req.body;
             const idOrIdentifier = req.params.idOrIdentifier;
 
-            // Get user's current resources and limits (with cache)
-            const user = await cache.getOrSet(
-                `ptero:user:${sessionUser.id}:servers`,
-                () => getPteroUser(sessionUser.id, db),
-                300
-            );
+            // Get user's current resources and limits (fresh, no cache for resource check)
+            const user = await getPteroUser(sessionUser.id, db);
             const userRecord = await db.user.findUnique({ where: { id: sessionUser.id }, select: { packageName: true, extraRam: true, extraDisk: true, extraCpu: true, extraServers: true } });
             const packageName = userRecord?.packageName;
             const packageConfig = settings.api.client.packages.list[packageName || settings.api.client.packages.default];
@@ -819,12 +824,8 @@ module.exports.load = async function (app, db) {
 
             const idOrIdentifier = req.params.idOrIdentifier;
 
-            // Get user's current resources and servers (with cache)
-            const user = await cache.getOrSet(
-                `ptero:user:${sessionUser.id}:servers`,
-                () => getPteroUser(sessionUser.id, db),
-                300
-            );
+            // Get user's current resources and servers (fresh)
+            const user = await getPteroUser(sessionUser.id, db);
             if (!user) {
                 return res.status(404).json({ error: 'User not found' });
             }

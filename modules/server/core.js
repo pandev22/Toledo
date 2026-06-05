@@ -115,8 +115,21 @@ async function checkIsServerOwner(pteroUser, serverId) {
 }
 
 // Invalidate the ownership cache for a given user
-async function invalidateOwnershipCache(pteroUserId) {
-  serverCache.del(`user_servers_${pteroUserId}`);
+async function invalidateOwnershipCache(userIdOrPteroId) {
+  if (!userIdOrPteroId) return;
+  serverCache.del(`user_servers_${userIdOrPteroId}`);
+
+  try {
+    const user = await db.user.findUnique({
+      where: { id: String(userIdOrPteroId) },
+      select: { pterodactylId: true }
+    });
+    if (user?.pterodactylId) {
+      serverCache.del(`user_servers_${user.pterodactylId}`);
+    }
+  } catch (error) {
+    // Ignore db lookup failures (e.g. if db not loaded yet)
+  }
 }
 
 // Fixed enhancedOwnsServer middleware with fresh Pterodactyl data

@@ -169,7 +169,7 @@ module.exports.load = async function (app, db) {
         const pteroUser = await cache.getOrSet(
           `ptero:user:${userId}:servers`,
           () => getPteroUser(userId, db),
-          300
+          15
         );
         const ownedServers = pteroUser?.attributes?.relationships?.servers?.data ?? [];
 
@@ -305,7 +305,7 @@ module.exports.load = async function (app, db) {
         const user = await cache.getOrSet(
           `ptero:user:${userId}:servers`,
           () => getPteroUser(userId, db),
-          300
+          15
         );
         if (user) {
           servers = user.attributes.relationships.servers.data;
