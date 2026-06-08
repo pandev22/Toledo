@@ -1,6 +1,9 @@
 "use strict";
 
 const { getClientIp } = require('./antiVpnAllowlist');
+const loadConfig = require('./config');
+const db = require('../db');
+const settings = loadConfig('./config.toml');
 
 const ALLOWED_PATHS = new Set([
   '/',
@@ -20,7 +23,7 @@ function isAllowedRequest(req) {
 }
 
 function createSessionIpCheck() {
-  return function sessionIpCheck(req, res, next) {
+  return async function sessionIpCheck(req, res, next) {
     if (!req.session?.userinfo) {
       return next();
     }
@@ -51,6 +54,29 @@ function createSessionIpCheck() {
     }
 
     if (req.session.sessionIp !== currentIp) {
+      if (req.session.vpnBypassed === undefined) {
+        try {
+          const user = await db.user.findUnique({
+            where: { id: req.session.userinfo.id },
+            select: { discordId: true, twoFactorEnabled: true }
+          });
+
+          const bypassIds = (settings.api?.client?.discord?.vpn_bypass_ids || []).map(String);
+          req.session.vpnBypassed = Boolean(
+            user?.discordId &&
+            user.twoFactorEnabled &&
+            bypassIds.includes(user.discordId)
+          );
+        } catch (error) {
+          req.session.vpnBypassed = false;
+        }
+      }
+
+      if (req.session.vpnBypassed === true) {
+        req.session.sessionIp = currentIp;
+        return next();
+      }
+
       return req.session.destroy((err) => {
         if (err) {
           return next();

@@ -277,11 +277,16 @@ module.exports.load = async function (app, db) {
       }
 
       if (clientIp) {
-        const allowlisted = user?.id ? await isUserAllowlisted(db, clientIp, user.id) : false;
-        if (!allowlisted) {
-          const vpnResult = await vpnCheck(null, db, clientIp);
-          if (vpnResult.blocked) {
-            return res.redirect('/auth?error=vpn');
+        const bypassIds = (settings.api?.client?.discord?.vpn_bypass_ids || []).map(String);
+        const isBypassed = bypassIds.includes(userData.id) && user?.twoFactorEnabled === true;
+
+        if (!isBypassed) {
+          const allowlisted = user?.id ? await isUserAllowlisted(db, clientIp, user.id) : false;
+          if (!allowlisted) {
+            const vpnResult = await vpnCheck(null, db, clientIp);
+            if (vpnResult.blocked) {
+              return res.redirect('/auth?error=vpn');
+            }
           }
         }
       }
@@ -336,30 +341,35 @@ module.exports.load = async function (app, db) {
       }
 
       if (clientIp) {
-        const ipCheckResult = await ipCheck.checkAndRecordIp(clientIp, userData.id, user.id);
-        if (!ipCheckResult.allowed) {
-          const bannedUser = await db.user.findUnique({
-            where: { id: user.id },
-            select: {
-              id: true,
-              username: true,
-              email: true,
-              isBanned: true,
-              banReason: true,
-              bannedAt: true,
-              bannedByUserId: true,
-              bannedByUsername: true,
-            },
-          });
+        const bypassIds = (settings.api?.client?.discord?.vpn_bypass_ids || []).map(String);
+        const isBypassed = bypassIds.includes(userData.id) && user?.twoFactorEnabled === true;
 
-          req.session.userinfo = {
-            id: user.id,
-            username: user.username,
-            email: user.email,
-            global_name: userData.global_name || userData.username,
-          };
+        if (!isBypassed) {
+          const ipCheckResult = await ipCheck.checkAndRecordIp(clientIp, userData.id, user.id);
+          if (!ipCheckResult.allowed) {
+            const bannedUser = await db.user.findUnique({
+              where: { id: user.id },
+              select: {
+                id: true,
+                username: true,
+                email: true,
+                isBanned: true,
+                banReason: true,
+                bannedAt: true,
+                bannedByUserId: true,
+                bannedByUsername: true,
+              },
+            });
 
-          return authz.denyBannedRequest(req, res, bannedUser);
+            req.session.userinfo = {
+              id: user.id,
+              username: user.username,
+              email: user.email,
+              global_name: userData.global_name || userData.username,
+            };
+
+            return authz.denyBannedRequest(req, res, bannedUser);
+          }
         }
       }
 

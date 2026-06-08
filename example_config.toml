@@ -51,6 +51,7 @@ accountSwitcher = true
   client_secret = "EL2IQYn-Qu"
   bot_token = ".GP589Y."
   server_id = ""
+  vpn_bypass_ids = []
 
   [api.client.resend]
   # ---------------------------------
