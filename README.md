@@ -48,10 +48,19 @@ sudo systemctl enable redis
 
 ### 2. Configure and Run
 
-1. Clone the repository and navigate to the server folder:
+1. Create the installation directory and clone the repositories:
    ```bash
-   git clone https://github.com/re-heliactyl/Toledo
-   cd Toledo/server
+   mkdir -p /var/www/heliactyl
+   cd /var/www/heliactyl
+
+   # Clone the server
+   git clone https://github.com/re-heliactyl/Toledo server
+
+   # Clone the frontend
+   git clone https://github.com/re-heliactyl/Toledo-Mono frontend
+
+   # Go to the server directory
+   cd server
    ```
 
 2. Install dependencies:
