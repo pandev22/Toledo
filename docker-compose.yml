@@ -5,7 +5,7 @@ services:
       dockerfile: server/Dockerfile
     container_name: toledo-server
     ports:
-      - "13000:17000"
+      - "13000:13000"
     volumes:
       - backend-data:/app/prisma
       - backend-sessions:/app/sessions

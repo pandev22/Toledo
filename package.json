@@ -60,5 +60,14 @@
     "@babel/plugin-transform-modules-commonjs": "^7.23.3",
     "@babel/preset-env": "^7.24.0",
     "prisma": "^5.22.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "sqlite3",
+      "bcrypt",
+      "prisma",
+      "@prisma/client",
+      "@prisma/engines"
+    ]
   }
 }

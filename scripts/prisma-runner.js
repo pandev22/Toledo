@@ -37,10 +37,52 @@ if (provider === "sqlite" && env.SQLITE_DATABASE_URL && (!env.DATABASE_URL || en
   env.DATABASE_URL = env.SQLITE_DATABASE_URL;
 }
 
-if (env.IS_DOCKER === "true" && env.DATABASE_URL) {
-  env.DATABASE_URL = env.DATABASE_URL
-    .replace(/@127\.0\.0\.1/, "@host.docker.internal")
-    .replace(/@localhost/, "@host.docker.internal");
+function adjustDatabaseUrl(url) {
+  if (!url) return url;
+  if (url.startsWith("file:")) return url;
+
+  try {
+    const lastAtIndex = url.lastIndexOf("@");
+    if (lastAtIndex !== -1) {
+      const credentialsPart = url.substring(0, lastAtIndex);
+      const hostPathPart = url.substring(lastAtIndex + 1);
+      
+      const protocolSeparatorIndex = credentialsPart.indexOf("://");
+      if (protocolSeparatorIndex !== -1) {
+        const protocol = credentialsPart.substring(0, protocolSeparatorIndex);
+        const userPass = credentialsPart.substring(protocolSeparatorIndex + 3);
+        
+        const colonIndex = userPass.indexOf(":");
+        if (colonIndex !== -1) {
+          const user = userPass.substring(0, colonIndex);
+          const password = userPass.substring(colonIndex + 1);
+          
+          const decodedPassword = decodeURIComponent(password);
+          const encodedPassword = encodeURIComponent(decodedPassword);
+          
+          let adjustedHostPath = hostPathPart;
+          if (env.IS_DOCKER === "true") {
+            adjustedHostPath = hostPathPart
+              .replace(/^127\.0\.0\.1/, "host.docker.internal")
+              .replace(/^localhost/, "host.docker.internal");
+          }
+          
+          return `${protocol}://${user}:${encodedPassword}@${adjustedHostPath}`;
+        }
+      }
+    }
+  } catch (e) {}
+
+  if (env.IS_DOCKER === "true") {
+    return url
+      .replace(/@127\.0\.0\.1/, "@host.docker.internal")
+      .replace(/@localhost/, "@host.docker.internal");
+  }
+  return url;
+}
+
+if (env.DATABASE_URL) {
+  env.DATABASE_URL = adjustDatabaseUrl(env.DATABASE_URL);
 }
 
 const executable = process.platform === "win32" ? "npx prisma" : "npx";
