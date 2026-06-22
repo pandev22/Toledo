@@ -2,7 +2,7 @@ services:
   server:
     build:
       context: ..
-      dockerfile: server-toledo/Dockerfile
+      dockerfile: server/Dockerfile
     container_name: toledo-server
     ports:
       - "13000:17000"

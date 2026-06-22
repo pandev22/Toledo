@@ -1,28 +1,28 @@
 # Stage 1: Build the frontend React app
-FROM node:20-alpine AS frontend-builder
+FROM node:20-slim AS frontend-builder
 
 WORKDIR /frontend
 
-COPY ../frontend/package.json ../frontend/pnpm-lock.yaml* ../frontend/package-lock.json* ./
+COPY frontend/package.json frontend/pnpm-lock.yaml* frontend/package-lock.json* ./
 
-RUN npm install -g pnpm && pnpm install --frozen-lockfile || npm install
+RUN npm install -g pnpm && pnpm install --no-frozen-lockfile || npm install
 
-COPY ../frontend/ .
+COPY frontend/ .
 
 RUN pnpm build || npm run build
 
 # Stage 2: Build the backend server
-FROM node:20-alpine
+FROM node:20-slim
 
-RUN apk add --no-cache python3 make g++
+RUN apt-get update && apt-get install -y python3 make g++ openssl && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-COPY package.json pnpm-lock.yaml* package-lock.json* ./
+COPY server/package.json server/pnpm-lock.yaml* server/package-lock.json* ./
 
 RUN npm install -g pnpm && pnpm install --frozen-lockfile --ignore-scripts || npm install --ignore-scripts
 
-COPY . .
+COPY server/ ./
 
 # Copy built frontend assets to the location expected by the routing module
 COPY --from=frontend-builder /frontend/dist /frontend/dist
