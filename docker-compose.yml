@@ -1,0 +1,30 @@
+services:
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: toledo-server
+    ports:
+      - "17000:17000"
+    volumes:
+      - backend-data:/app/prisma
+      - backend-sessions:/app/sessions
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=file:./prisma/heliactyl.db
+    restart: always
+
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+    container_name: toledo-frontend
+    ports:
+      - "13000:80"
+    depends_on:
+      - server
+    restart: always
+
+volumes:
+  backend-data:
+  backend-sessions:
