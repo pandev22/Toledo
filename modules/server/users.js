@@ -76,9 +76,21 @@ async function updateSubuserInfo(serverId, serverOwnerId) {
     const serverName = await getServerName(serverId);
 
     for (const subuser of subusers) {
-      const user = await db.user.findFirst({
-        where: { OR: [{ email: subuser.email }, { pteroUsername: subuser.username }, { username: subuser.username }] }
-      });
+      let user = null;
+      if (subuser.email && subuser.email.startsWith('discord_')) {
+        const potentialCuid = subuser.email.split('@')[0].substring(8).split('+')[0];
+        if (potentialCuid) {
+          user = await db.user.findUnique({
+            where: { id: potentialCuid }
+          });
+        }
+      }
+
+      if (!user) {
+        user = await db.user.findFirst({
+          where: { OR: [{ email: subuser.email }, { pteroUsername: subuser.username }, { username: subuser.username }] }
+        });
+      }
 
       if (user) {
         await db.subuserServer.upsert({
