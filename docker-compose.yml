@@ -1,11 +1,11 @@
 services:
   server:
     build:
-      context: .
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: server-toledo/Dockerfile
     container_name: toledo-server
     ports:
-      - "17000:17000"
+      - "13000:17000"
     volumes:
       - backend-data:/app/prisma
       - backend-sessions:/app/sessions
@@ -16,17 +16,6 @@ services:
       - IS_DOCKER=true
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    restart: always
-
-  frontend:
-    build:
-      context: ../frontend
-      dockerfile: Dockerfile
-    container_name: toledo-frontend
-    ports:
-      - "13000:80"
-    depends_on:
-      - server
     restart: always
 
 volumes:
