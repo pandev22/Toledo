@@ -16,11 +16,23 @@ const { PrismaClient } = dbProvider === "mysql"
 
 let prisma;
 
+function adjustUrlForDocker(url) {
+  if (!url) return url;
+  if (process.env.IS_DOCKER === "true" || process.env.IS_DOCKER === true) {
+    return url
+      .replace(/@127\.0\.0\.1(?::|\/)/, "@host.docker.internal$1")
+      .replace(/@localhost(?::|\/)/, "@host.docker.internal$1");
+  }
+  return url;
+}
+
 function getClient() {
   if (!prisma) {
-    const databaseUrl = dbProvider === "mysql"
+    const rawDatabaseUrl = dbProvider === "mysql"
       ? (process.env.MYSQL_DATABASE_URL || process.env.DATABASE_URL)
       : (process.env.SQLITE_DATABASE_URL || process.env.DATABASE_URL);
+
+    const databaseUrl = adjustUrlForDocker(rawDatabaseUrl);
 
     prisma = new PrismaClient({
       ...(databaseUrl ? { datasources: { db: { url: databaseUrl } } } : {}),

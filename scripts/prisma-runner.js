@@ -29,12 +29,18 @@ const schemaPath = provider === "mysql"
   : path.join("prisma", "schema.prisma");
 
 const env = { ...process.env };
-if (provider === "mysql" && env.MYSQL_DATABASE_URL && !env.DATABASE_URL) {
+if (provider === "mysql" && env.MYSQL_DATABASE_URL && (!env.DATABASE_URL || env.DATABASE_URL.trim() === "")) {
   env.DATABASE_URL = env.MYSQL_DATABASE_URL;
 }
 
-if (provider === "sqlite" && env.SQLITE_DATABASE_URL && !env.DATABASE_URL) {
+if (provider === "sqlite" && env.SQLITE_DATABASE_URL && (!env.DATABASE_URL || env.DATABASE_URL.trim() === "")) {
   env.DATABASE_URL = env.SQLITE_DATABASE_URL;
+}
+
+if (env.IS_DOCKER === "true" && env.DATABASE_URL) {
+  env.DATABASE_URL = env.DATABASE_URL
+    .replace(/@127\.0\.0\.1(?::|\/)/, "@host.docker.internal$1")
+    .replace(/@localhost(?::|\/)/, "@host.docker.internal$1");
 }
 
 const executable = process.platform === "win32" ? "npx prisma" : "npx";

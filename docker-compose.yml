@@ -13,6 +13,7 @@ services:
       - .env
     environment:
       - NODE_ENV=production
+      - IS_DOCKER=true
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: always
