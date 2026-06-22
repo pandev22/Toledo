@@ -39,8 +39,8 @@ if (provider === "sqlite" && env.SQLITE_DATABASE_URL && (!env.DATABASE_URL || en
 
 if (env.IS_DOCKER === "true" && env.DATABASE_URL) {
   env.DATABASE_URL = env.DATABASE_URL
-    .replace(/@127\.0\.0\.1(?::|\/)/, "@host.docker.internal$1")
-    .replace(/@localhost(?::|\/)/, "@host.docker.internal$1");
+    .replace(/@127\.0\.0\.1/, "@host.docker.internal")
+    .replace(/@localhost/, "@host.docker.internal");
 }
 
 const executable = process.platform === "win32" ? "npx prisma" : "npx";

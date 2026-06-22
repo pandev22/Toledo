@@ -20,8 +20,8 @@ function adjustUrlForDocker(url) {
   if (!url) return url;
   if (process.env.IS_DOCKER === "true" || process.env.IS_DOCKER === true) {
     return url
-      .replace(/@127\.0\.0\.1(?::|\/)/, "@host.docker.internal$1")
-      .replace(/@localhost(?::|\/)/, "@host.docker.internal$1");
+      .replace(/@127\.0\.0\.1/, "@host.docker.internal")
+      .replace(/@localhost/, "@host.docker.internal");
   }
   return url;
 }

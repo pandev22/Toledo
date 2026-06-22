@@ -24,7 +24,7 @@ RUN npm install -g pnpm && pnpm install --frozen-lockfile --ignore-scripts || np
 
 COPY server/ ./
 
-RUN pnpm rebuild || npm rebuild
+RUN pnpm config set only-built-dependencies sqlite3,bcrypt && pnpm rebuild sqlite3 bcrypt || npm rebuild
 
 # Copy built frontend assets to the location expected by the routing module
 COPY --from=frontend-builder /frontend/dist /frontend/dist

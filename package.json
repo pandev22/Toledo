@@ -51,7 +51,7 @@
     "prisma:validate:sqlite": "node ./scripts/prisma-runner.js validate --provider=sqlite",
     "prisma:validate:mysql": "node ./scripts/prisma-runner.js validate --provider=mysql",
     "postinstall": "npm run prisma:generate",
-    "prestart": "node ./scripts/prisma-runner.js generate",
+    "prestart": "node ./scripts/prisma-runner.js generate && node ./scripts/prisma-runner.js db push --skip-generate",
     "start": "node --no-deprecation app.js"
   },
   "devDependencies": {
