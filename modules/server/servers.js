@@ -729,6 +729,17 @@ module.exports.load = async function (app, db) {
                 return acc;
             }, { ram: 0, disk: 0, cpu: 0 });
 
+            // Prevent setting resources to 0 (unlimited) if they weren't already 0 (unlimited)
+            if (ram === 0 && server.attributes.limits.memory !== 0) {
+                return res.status(400).json({ error: 'RAM cannot be set to 0 (unlimited)' });
+            }
+            if (disk === 0 && server.attributes.limits.disk !== 0) {
+                return res.status(400).json({ error: 'Disk space cannot be set to 0 (unlimited)' });
+            }
+            if (cpu === 0 && server.attributes.limits.cpu !== 0) {
+                return res.status(400).json({ error: 'CPU limit cannot be set to 0 (unlimited)' });
+            }
+
             // Check resource limits with new values
             if (usage.ram + ram > packageConfig.ram + extra.ram) {
                 return res.status(400).json({
@@ -766,13 +777,13 @@ module.exports.load = async function (app, db) {
             }
 
             if (eggInfo?.minimum) {
-                if (ram < eggInfo.minimum.ram) {
+                if (ram > 0 && ram < eggInfo.minimum.ram) {
                     return res.status(400).json({ error: `Minimum RAM required is ${eggInfo.minimum.ram}MB` });
                 }
-                if (disk < eggInfo.minimum.disk) {
+                if (disk > 0 && disk < eggInfo.minimum.disk) {
                     return res.status(400).json({ error: `Minimum disk required is ${eggInfo.minimum.disk}MB` });
                 }
-                if (cpu < eggInfo.minimum.cpu) {
+                if (cpu > 0 && cpu < eggInfo.minimum.cpu) {
                     return res.status(400).json({ error: `Minimum CPU required is ${eggInfo.minimum.cpu}%` });
                 }
             }

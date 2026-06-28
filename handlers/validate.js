@@ -149,15 +149,15 @@ const schemas = {
 
   // Server resource modification
   serverModify: z.object({
-    ram: z.number({ invalid_type_error: 'RAM must be a number' })
+    ram: z.coerce.number({ invalid_type_error: 'RAM must be a number' })
       .int('RAM must be a whole number')
-      .min(128, 'RAM must be at least 128MB'),
-    disk: z.number({ invalid_type_error: 'Disk must be a number' })
+      .refine(val => val === 0 || val >= 128, 'RAM must be at least 128MB'),
+    disk: z.coerce.number({ invalid_type_error: 'Disk must be a number' })
       .int('Disk must be a whole number')
-      .min(256, 'Disk must be at least 256MB'),
-    cpu: z.number({ invalid_type_error: 'CPU must be a number' })
+      .refine(val => val === 0 || val >= 256, 'Disk must be at least 256MB'),
+    cpu: z.coerce.number({ invalid_type_error: 'CPU must be a number' })
       .int('CPU must be a whole number')
-      .min(1, 'CPU must be at least 1%')
+      .refine(val => val === 0 || val >= 1, 'CPU must be at least 1%')
   }),
 
   // Billing checkout
