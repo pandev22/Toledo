@@ -652,14 +652,14 @@ module.exports.load = async function (app, db) {
       let matchedServer = null;
 
       try {
-        const response = await pteroApi.get(`/api/application/servers/external/${serverId}`);
+        const response = await pteroApi.get(`/api/application/servers/external/${serverId}?include=allocations`);
         matchedServer = response.data.attributes;
       } catch (e) {
         try {
-          const response = await pteroApi.get(`/api/application/servers/${serverId}`);
+          const response = await pteroApi.get(`/api/application/servers/${serverId}?include=allocations`);
           matchedServer = response.data.attributes;
         } catch (err) {
-          const list = await pteroApi.get(`/api/application/servers`);
+          const list = await pteroApi.get(`/api/application/servers?include=allocations`);
           const matched = list.data.data.find(s => s.attributes.uuid.startsWith(serverId) || s.attributes.identifier === serverId);
           if (matched) matchedServer = matched.attributes;
         }
@@ -717,6 +717,55 @@ module.exports.load = async function (app, db) {
     } catch (error) {
       console.error(error);
       res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  app.post('/api/v5/server/allocation/add', authenticateApiKey, async (req, res) => {
+    try {
+      const { serverId, moderator } = req.body;
+      if (!serverId) return res.status(400).json({ error: 'Missing serverId' });
+      let matchedServer = null;
+
+      try {
+        const sInfo = await pteroApi.get(`/api/application/servers/external/${serverId}`);
+        matchedServer = sInfo.data.attributes;
+      } catch (e) {
+        try {
+          const sInfo = await pteroApi.get(`/api/application/servers/${serverId}`);
+          matchedServer = sInfo.data.attributes;
+        } catch (err) {
+          const serversList = await pteroApi.get(`/api/application/servers`);
+          const matched = serversList.data.data.find(s => s.attributes.uuid.startsWith(serverId) || s.attributes.identifier === serverId);
+          if (matched) matchedServer = matched.attributes;
+        }
+      }
+
+      if (!matchedServer) return res.status(404).json({ error: 'Server not found' });
+      const resolvedIdentifier = matchedServer.identifier;
+
+      const response = await pteroClientApi.post(`/api/client/servers/${resolvedIdentifier}/network/allocations`, {});
+      const attributes = response.data.attributes;
+
+      const mod = moderator || 'API Client';
+      log('server_modified', `${mod} added port ${attributes.port} to server \`${resolvedIdentifier}\``);
+
+      res.json({
+        success: true,
+        identifier: resolvedIdentifier,
+        allocation: {
+          id: attributes.id,
+          ip: attributes.ip,
+          port: attributes.port,
+          is_primary: attributes.is_default,
+          alias: attributes.ip_alias || null
+        }
+      });
+    } catch (error) {
+      console.error('Error adding allocation:', error);
+      res.status(500).json({
+        error: 'Failed to add allocation',
+        details: error.response?.data || error.message
+      });
     }
   });
 
