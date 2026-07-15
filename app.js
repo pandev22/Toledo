@@ -53,8 +53,10 @@ if (isPostgres) {
   const PgStore = require("connect-pg-simple")(session);
   sessionStore = new PgStore({ conString: dbUrl, tableName: "session", createTableIfMissing: true });
 } else {
+  const sqlite3 = require("sqlite3");
   const SQLiteStore = require("connect-sqlite3")(session);
-  sessionStore = new SQLiteStore({ db: "sessions.db", dir: "./" });
+  const sqliteDb = new sqlite3.Database("./sessions.db");
+  sessionStore = new SQLiteStore({ db: sqliteDb });
 }
 
 app.use(session({
