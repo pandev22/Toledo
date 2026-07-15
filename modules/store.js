@@ -71,23 +71,6 @@ class AFKRewardsManager {
     return merged;
   }
 
-  async getCoinsPerMinute(userId) {
-    try {
-      // Check if user has upgraded_pack or god_pack
-      const hasPack = await this.db.userPack.findFirst({
-        where: {
-          userId,
-          type: { in: ['upgraded_pack', 'god_pack'] },
-          status: 'active',
-          expiresAt: { gt: new Date() }
-        }
-      });
-      return hasPack ? this.BASE_COINS_PER_MINUTE * 1.5 : this.BASE_COINS_PER_MINUTE;
-    } catch {
-      return this.BASE_COINS_PER_MINUTE;
-    }
-  }
-
   getStartOfToday() {
     const now = new Date();
     return new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -160,10 +143,9 @@ class AFKRewardsManager {
         return;
       }
 
-      const coinsPerMinute = await this.getCoinsPerMinute(userId);
       const todayTotal = await this.getTodayAfkTotal(userId);
       const remainingToday = Math.max(0, config.dailyCap - todayTotal);
-      const rewardAmount = Math.min(coinsPerMinute, remainingToday);
+      const rewardAmount = Math.min(this.BASE_COINS_PER_MINUTE, remainingToday);
 
       if (rewardAmount <= 0) {
         try { ws.send(JSON.stringify({ type: 'daily_cap_reached', dailyCap: config.dailyCap })); } catch {}
@@ -219,14 +201,13 @@ class AFKRewardsManager {
     return this.sessions.get(userId)?.lastReward || Date.now();
   }
 
-  async sendState(userId, ws) {
+  sendState(userId, ws) {
     const lastRewardTime = this.getLastReward(userId);
     const nextRewardIn = Math.max(0, this.INTERVAL_MS - (Date.now() - lastRewardTime));
-    const coinsPerMinute = await this.getCoinsPerMinute(userId);
 
     ws.send(JSON.stringify({
       type: 'afk_state',
-      coinsPerMinute,
+      coinsPerMinute: this.BASE_COINS_PER_MINUTE,
       nextRewardIn,
       timestamp: Date.now()
     }));
@@ -234,7 +215,7 @@ class AFKRewardsManager {
 
   startStateUpdates(userId, ws) {
     const updateState = () => {
-      this.sendState(userId, ws).catch(() => {});
+      this.sendState(userId, ws);
       const timeout = setTimeout(updateState, 1000);
       this.stateTimeouts.set(userId, timeout);
     };
@@ -279,33 +260,6 @@ const MAX_RESOURCE_LIMITS = {
   servers: 20
 };
 
-// Resources that get 1.5x boost from Upgraded Pack
-const UPGRADED_PACK_BOOSTED_RESOURCES = ['ram', 'disk'];
-const UPGRADED_PACK_MULTIPLIER = 1.5;
-
-async function getUserMaxLimits(db, userId, baseLimits = MAX_RESOURCE_LIMITS) {
-  try {
-    const hasPack = await db.userPack.findFirst({
-      where: {
-        userId,
-        type: { in: ['upgraded_pack', 'god_pack'] },
-        status: 'active',
-        expiresAt: { gt: new Date() }
-      }
-    });
-
-    if (!hasPack) return baseLimits;
-
-    const boosted = { ...baseLimits };
-    for (const resource of UPGRADED_PACK_BOOSTED_RESOURCES) {
-      boosted[resource] = Math.round(baseLimits[resource] * UPGRADED_PACK_MULTIPLIER);
-    }
-    return boosted;
-  } catch {
-    return baseLimits;
-  }
-}
-
 class StoreError extends Error {
   constructor(message, code) {
     super(message);
@@ -343,8 +297,7 @@ class Store {
     const currentAmount = user?.[field] ?? 0;
     const newAmount = currentAmount + actualAmount;
 
-    const maxLimits = await getUserMaxLimits(this.db, userId);
-    const maxLimit = maxLimits[resourceType] * RESOURCE_MULTIPLIERS[resourceType];
+    const maxLimit = MAX_RESOURCE_LIMITS[resourceType] * RESOURCE_MULTIPLIERS[resourceType];
     if (newAmount > maxLimit) {
       throw new StoreError(`Resource limit exceeded`, 'RESOURCE_LIMIT_EXCEEDED');
     }
@@ -450,15 +403,12 @@ module.exports.load = function (app, db) {
       const user = await db.user.findUnique({ where: { id: userId }, select: { coins: true } });
       const userCoins = user?.coins ?? 0;
 
-      const userLimits = await getUserMaxLimits(db, userId);
-
       const configResponse = {
         prices: {
           resources: RESOURCE_PRICES
         },
         multipliers: RESOURCE_MULTIPLIERS,
-        limits: userLimits,
-        baseLimits: MAX_RESOURCE_LIMITS,
+        limits: MAX_RESOURCE_LIMITS,
         userBalance: userCoins,
         canAfford: {
           ram: userCoins >= RESOURCE_PRICES.ram,
@@ -564,8 +514,7 @@ module.exports.load = function (app, db) {
       }
 
       const currentResource = user?.[field] ?? 0;
-      const userMaxLimits = await getUserMaxLimits(db, userId);
-      const maxLimit = userMaxLimits[resourceType] * RESOURCE_MULTIPLIERS[resourceType];
+      const maxLimit = MAX_RESOURCE_LIMITS[resourceType] * RESOURCE_MULTIPLIERS[resourceType];
       if (currentResource + actualAmount > maxLimit) {
         return res.status(400).json({ error: 'Resource limit exceeded', code: 'RESOURCE_LIMIT_EXCEEDED' });
       }
