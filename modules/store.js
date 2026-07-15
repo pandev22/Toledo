@@ -71,6 +71,23 @@ class AFKRewardsManager {
     return merged;
   }
 
+  async getCoinsPerMinute(userId) {
+    try {
+      // Check if user has upgraded_pack or god_pack
+      const hasPack = await this.db.userPack.findFirst({
+        where: {
+          userId,
+          type: { in: ['upgraded_pack', 'god_pack'] },
+          status: 'active',
+          expiresAt: { gt: new Date() }
+        }
+      });
+      return hasPack ? this.BASE_COINS_PER_MINUTE * 1.5 : this.BASE_COINS_PER_MINUTE;
+    } catch {
+      return this.BASE_COINS_PER_MINUTE;
+    }
+  }
+
   getStartOfToday() {
     const now = new Date();
     return new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -143,9 +160,10 @@ class AFKRewardsManager {
         return;
       }
 
+      const coinsPerMinute = await this.getCoinsPerMinute(userId);
       const todayTotal = await this.getTodayAfkTotal(userId);
       const remainingToday = Math.max(0, config.dailyCap - todayTotal);
-      const rewardAmount = Math.min(this.BASE_COINS_PER_MINUTE, remainingToday);
+      const rewardAmount = Math.min(coinsPerMinute, remainingToday);
 
       if (rewardAmount <= 0) {
         try { ws.send(JSON.stringify({ type: 'daily_cap_reached', dailyCap: config.dailyCap })); } catch {}
@@ -201,13 +219,14 @@ class AFKRewardsManager {
     return this.sessions.get(userId)?.lastReward || Date.now();
   }
 
-  sendState(userId, ws) {
+  async sendState(userId, ws) {
     const lastRewardTime = this.getLastReward(userId);
     const nextRewardIn = Math.max(0, this.INTERVAL_MS - (Date.now() - lastRewardTime));
+    const coinsPerMinute = await this.getCoinsPerMinute(userId);
 
     ws.send(JSON.stringify({
       type: 'afk_state',
-      coinsPerMinute: this.BASE_COINS_PER_MINUTE,
+      coinsPerMinute,
       nextRewardIn,
       timestamp: Date.now()
     }));
@@ -215,7 +234,7 @@ class AFKRewardsManager {
 
   startStateUpdates(userId, ws) {
     const updateState = () => {
-      this.sendState(userId, ws);
+      this.sendState(userId, ws).catch(() => {});
       const timeout = setTimeout(updateState, 1000);
       this.stateTimeouts.set(userId, timeout);
     };
