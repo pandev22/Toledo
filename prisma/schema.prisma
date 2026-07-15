@@ -86,6 +86,7 @@ model User {
   passkeys        Passkey[]
   subdomains      ServerSubdomain[]
   antiVpnAllowlists AntiVpnAllowlistUser[]
+  packs           UserPack[]
 }
 
 model AntiVpnAllowlist {
@@ -408,6 +409,24 @@ model InstalledPlugin {
 
   @@unique([serverId, pluginId, platform])
   @@index([serverId])
+}
+
+model UserPack {
+  id                    String    @id @default(cuid())
+  userId                String
+  type                  String    // auto_renew, upgraded_pack, god_pack
+  status                String    @default("active") // active, expired, cancelled
+  stripeSubscriptionId  String?   @unique
+  stripeCustomerId      String?
+  startedAt             DateTime  @default(now())
+  expiresAt             DateTime
+  createdAt             DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, type])
+  @@index([status, expiresAt])
+  @@index([userId])
 }
 
 model ServerSubdomain {

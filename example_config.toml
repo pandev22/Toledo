@@ -93,6 +93,17 @@ cpu = 100
 servers = 2
 
 # ---------------------------------
+# Bundle Configuration (Auto Renew, Upgraded Pack, God Pack)
+# ---------------------------------
+[api.client.bundles]
+auto_renew_price = 4.99
+upgraded_pack_price = 9.99
+god_pack_price = 19.99
+god_pack_role_id = "000000000000000000"
+subscription_days = 30
+mantle_bundle_card = true
+
+# ---------------------------------
 # Egg Configuration
 # ---------------------------------
 
