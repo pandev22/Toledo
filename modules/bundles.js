@@ -20,6 +20,12 @@ module.exports.HeliactylModule = HeliactylModule;
 const SUBSCRIPTION_DAYS = settings?.api?.client?.bundles?.subscription_days || 30;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+// Pterodactyl API
+const pteroApi = axios.create({
+  baseURL: settings.pterodactyl.domain,
+  headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', 'Authorization': `Bearer ${settings.pterodactyl.key}` }
+});
+
 let stripeKey = settings?.api?.client?.stripe?.secret_key;
 let stripeInstance = new Stripe(stripeKey || 'sk_test_mock_key');
 function getStripe() {
@@ -256,10 +262,12 @@ class BundleManager {
       case 'customer.subscription.updated': {
         const s = event.data.object;
         if (['canceled', 'incomplete_expired', 'unpaid'].includes(s.status)) {
-          const gp = await this.db.userPack.findFirst({
-            where: { stripeSubscriptionId: s.id, type: 'god_pack', status: 'active' }
+          const pack = await this.db.userPack.findFirst({
+            where: { stripeSubscriptionId: s.id, status: 'active' }
           });
-          await this.cancelSubscriptionPacks(s.id, gp?.userId || s.metadata?.userId, !!gp);
+          if (pack) {
+            await this.cancelSubscriptionPacks(s.id, pack.userId, pack.type === 'god_pack', pack.type === 'upgraded_pack' || pack.type === 'god_pack');
+          }
         }
         break;
       }
@@ -290,7 +298,7 @@ class BundleManager {
    * Cancel all packs for a user linked to a Stripe subscription.
    * For god_pack, also cleans up subsidiary auto_renew/upgraded_pack entries.
    */
-  async cancelSubscriptionPacks(stripeSubscriptionId, userId, isGodPack) {
+  async cancelSubscriptionPacks(stripeSubscriptionId, userId, isGodPack, hadResourceBoost = false) {
     // Cancel the main pack(s) with this subscription ID
     await this.db.userPack.updateMany({
       where: { stripeSubscriptionId, status: 'active' },
@@ -305,14 +313,145 @@ class BundleManager {
       });
       try { await this.removeDiscordRole(userId); } catch {}
     }
+
+    // Downgrade server resources if user had resource boost (upgraded_pack or god_pack)
+    if (hadResourceBoost || isGodPack) {
+      try { await this.downgradeUserServerResources(userId); } catch {}
+    }
+
+    // Force server renewal re-check for auto-renew capability
+    try { await this.forceUserRenewalCheck(userId); } catch {}
+  }
+
+  /**
+   * When Upgraded Pack / God Pack expires, cap server resources
+   * back to the egg's configured maximum limits.
+   */
+  async downgradeUserServerResources(userId) {
+    try {
+      const user = await this.db.user.findUnique({
+        where: { id: userId },
+        select: { pterodactylId: true, packageName: true }
+      });
+      if (!user?.pterodactylId) return;
+
+      const response = await pteroApi.get(`/api/application/users/${user.pterodactylId}?include=servers`);
+      const servers = response.data?.attributes?.relationships?.servers?.data || [];
+
+      for (const server of servers) {
+        const attr = server.attributes;
+        const limits = attr.limits;
+        if (!limits) continue;
+
+        // Get the standard egg maximum from the DB
+        const eggConfig = await this.db.eggConfig.findFirst({
+          where: { pterodactylEggId: attr.egg }
+        });
+
+        let maxRam, maxDisk;
+
+        if (eggConfig?.maximum) {
+          try {
+            const max = typeof eggConfig.maximum === 'string' ? JSON.parse(eggConfig.maximum) : eggConfig.maximum;
+            maxRam = max.ram;
+            maxDisk = max.disk;
+          } catch {}
+        }
+
+        // Fallback: use package limits as the cap
+        if (!maxRam && !maxDisk) {
+          const pkg = settings?.api?.client?.packages?.list?.[user.packageName || settings?.api?.client?.packages?.default];
+          if (pkg) {
+            maxRam = pkg.ram || 0;
+            maxDisk = pkg.disk || 0;
+          }
+        }
+
+        // If no reference limit found, skip this server
+        if (!maxRam && !maxDisk) continue;
+
+        // Only reduce if current exceeds the standard limit
+        const newRam = maxRam && limits.memory > maxRam ? maxRam : limits.memory;
+        const newDisk = maxDisk && limits.disk > maxDisk ? maxDisk : limits.disk;
+        const newCpu = limits.cpu; // CPU never changes
+
+        if (newRam === limits.memory && newDisk === limits.disk) continue;
+
+        try {
+          await pteroApi.patch(`/api/application/servers/${attr.id}/build`, {
+            allocation: attr.allocation,
+            memory: newRam,
+            swap: limits.swap || 0,
+            disk: newDisk,
+            io: limits.io || 500,
+            cpu: newCpu,
+            threads: limits.threads || null,
+            feature_limits: {
+              databases: attr.feature_limits?.databases || 0,
+              allocations: attr.feature_limits?.allocations || 0,
+              backups: attr.feature_limits?.backups || 0
+            }
+          });
+          console.log(`[BUNDLES] Capped server ${attr.identifier}: RAM ${limits.memory}->${newRam}, Disk ${limits.disk}->${newDisk}`);
+        } catch (err) {
+          console.error(`[BUNDLES] Failed to cap server ${attr.identifier}:`, err.message);
+        }
+      }
+    } catch (e) {
+      console.error('[BUNDLES] Downgrade resources error:', e);
+    }
+  }
+
+  /**
+   * When auto-renew subscription ends, reset server renewal records
+   * so the maintenance cycle re-evaluates them immediately.
+   */
+  async forceUserRenewalCheck(userId) {
+    try {
+      const prefix = 'server-renewal:';
+      const rows = await this.db.heliactyl.findMany({
+        where: { key: { startsWith: prefix } }
+      });
+
+      for (const row of rows) {
+        try {
+          const record = JSON.parse(row.value);
+          if (record.userId === userId) {
+            // Set nextRenewalAt to the past so the maintenance cycle picks it up
+            record.nextRenewalAt = new Date(0).toISOString();
+            record.updatedAt = new Date().toISOString();
+            await this.db.heliactyl.update({
+              where: { key: row.key },
+              data: { value: JSON.stringify(record) }
+            });
+          }
+        } catch {}
+      }
+    } catch (e) {
+      console.error('[BUNDLES] Force renewal check error:', e);
+    }
   }
 
   async checkExpiredPacks() {
     try {
       const expired = await this.db.userPack.findMany({ where: { status: 'active', expiresAt: { lte: new Date() } } });
       for (const p of expired) {
-        if (p.type === 'god_pack') { try { await this.removeDiscordRole(p.userId); } catch {} await this.db.userPack.updateMany({ where: { userId: p.userId, status: 'active', type: { in: ['auto_renew', 'upgraded_pack'] }, expiresAt: { lte: new Date() } }, data: { status: 'expired' } }); }
+        const needsDowngrade = p.type === 'upgraded_pack' || p.type === 'god_pack';
+        const isAuto = p.type === 'auto_renew' || p.type === 'god_pack';
+        const isGod = p.type === 'god_pack';
+
+        if (isGod) {
+          try { await this.removeDiscordRole(p.userId); } catch {}
+          await this.db.userPack.updateMany({
+            where: { userId: p.userId, status: 'active', type: { in: ['auto_renew', 'upgraded_pack'] }, expiresAt: { lte: new Date() } },
+            data: { status: 'expired' }
+          });
+        }
+
         await this.db.userPack.update({ where: { id: p.id }, data: { status: 'expired' } });
+
+        if (needsDowngrade) { try { await this.downgradeUserServerResources(p.userId); } catch {} }
+        if (isAuto) { try { await this.forceUserRenewalCheck(p.userId); } catch {} }
       }
     } catch (e) { console.error('[BUNDLES] Expiry check error:', e); }
   }
@@ -340,14 +479,13 @@ class BundleManager {
           const sub = await getStripe().subscriptions.retrieve(pack.stripeSubscriptionId);
           const status = sub.status;
 
-          if (status === 'canceled' || status === 'incomplete_expired' || status === 'unpaid') {
-            await this.cancelSubscriptionPacks(pack.stripeSubscriptionId, pack.userId, pack.type === 'god_pack');
-            console.log(`[BUNDLES] Stripe verification: cancelled sub ${pack.stripeSubscriptionId} (${status})`);
+          if (['canceled', 'incomplete_expired', 'unpaid'].includes(status)) {
+            await this.cancelSubscriptionPacks(pack.stripeSubscriptionId, pack.userId, pack.type === 'god_pack', pack.type === 'upgraded_pack' || pack.type === 'god_pack');
+            console.log(`[BUNDLES] Stripe verification: sub ${pack.stripeSubscriptionId} (${status})`);
           }
         } catch (err) {
-          // If Stripe returns 404, the subscription was deleted on Stripe side
           if (err.response?.status === 404) {
-            await this.cancelSubscriptionPacks(pack.stripeSubscriptionId, pack.userId, pack.type === 'god_pack');
+            await this.cancelSubscriptionPacks(pack.stripeSubscriptionId, pack.userId, pack.type === 'god_pack', pack.type === 'upgraded_pack' || pack.type === 'god_pack');
             console.log(`[BUNDLES] Stripe verification: sub ${pack.stripeSubscriptionId} not found (deleted)`);
           } else {
             console.error(`[BUNDLES] Stripe verification error for ${pack.stripeSubscriptionId}:`, err.message);
