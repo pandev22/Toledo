@@ -95,7 +95,7 @@ const moduleExports = { app, db, VERSION, PLATFORM_CODENAME, API_LEVEL };
 module.exports = moduleExports;
 global.__rootdir = __dirname;
 
-if (require.main === module) {
+if (require.main === module || require.main?.filename === __filename || !module.parent) {
   (async () => {
     try {
       const moduleLoader = new ModuleLoader(app, db, VERSION, API_LEVEL);

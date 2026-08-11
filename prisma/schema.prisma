@@ -87,6 +87,7 @@ model User {
   subdomains      ServerSubdomain[]
   antiVpnAllowlists AntiVpnAllowlistUser[]
   packs           UserPack[]
+  roles           UserRole[]
 }
 
 model AntiVpnAllowlist {
@@ -445,3 +446,57 @@ model ServerSubdomain {
   @@index([serverId])
   @@index([userId])
 }
+
+// ??????????????????????????????????????????????
+// ??????????????????????????????????????????????
+
+  id          String            @id @default(cuid())
+  key         String            @unique // e.g. "create_server", "daily_claim", "stake_coins", "claim_referral", "generate_referral"
+  name        String
+  description String
+  rewardCoins Int               @default(0)
+  createdAt   DateTime          @default(now())
+  users       UserAchievement[]
+}
+
+  id            String   @id @default(cuid())
+  userId        String
+  unlockedAt    DateTime @default(now())
+
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+// ??????????????????????????????????????????????
+// Custom Roles & Permissions System (RBAC)
+// ??????????????????????????????????????????????
+
+model Role {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  description String?
+  color       String   @default("#6366f1")
+  priority    Int      @default(0)
+  isSystem    Boolean  @default(false)
+  permissions String   @default("[]") // JSON array of string keys
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  users UserRole[]
+}
+
+model UserRole {
+  id         String   @id @default(cuid())
+  userId     String
+  roleId     String
+  assignedAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, roleId])
+  @@index([userId])
+  @@index([roleId])
+}
+
