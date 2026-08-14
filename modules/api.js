@@ -444,7 +444,7 @@ module.exports.load = async function (app, db) {
   // 2. Modify User Coins
   app.post('/api/v5/user/coins', authenticateApiKey, async (req, res) => {
     try {
-      const { target, action, amount, moderator } = req.body;
+      const { target, action, amount, reason, moderator } = req.body;
       const user = await resolveUser(target);
       if (!user) return res.status(404).json({ error: 'User not found' });
 
@@ -474,11 +474,11 @@ module.exports.load = async function (app, db) {
           userId: user.id,
           type: action === 'add' ? 'earn' : 'spend',
           amount: action === 'set' ? Math.abs(newCoins - oldCoins) : parsedAmount,
-          description: `Modified via API client by ${moderator}`
+          description: `Modified via API client by ${moderator}${reason ? ` (Reason: ${reason})` : ''}`
         }
       });
 
-      log('coins updated', `${moderator} updated coins from ${oldCoins} to ${newCoins} for user ${user.username} (ID: ${user.id})`);
+      log('coins updated', `${moderator} updated coins from ${oldCoins} to ${newCoins} for user ${user.username} (ID: ${user.id})${reason ? ` - Reason: ${reason}` : ''}`);
 
       res.json({ success: true, oldCoins, newCoins: updatedUser.coins, username: user.username });
     } catch (error) {
@@ -490,7 +490,7 @@ module.exports.load = async function (app, db) {
   // 3. Modify User Resources
   app.post('/api/v5/user/resources', authenticateApiKey, async (req, res) => {
     try {
-      const { target, action, cpu, ram, disk, servers, moderator } = req.body;
+      const { target, action, reason, cpu, ram, disk, servers, moderator } = req.body;
       const user = await resolveUser(target);
       if (!user) return res.status(404).json({ error: 'User not found' });
 
@@ -540,7 +540,7 @@ module.exports.load = async function (app, db) {
 
       await suspendIfNeeded(user.id, settings, db);
 
-      log('resources updated', `${moderator} updated resources for ${user.username}: CPU ${newCpu}%, RAM ${newRam}MB, Disk ${newDisk}MB, Servers ${newServers}`);
+      log('resources updated', `${moderator} updated resources for ${user.username}: CPU ${newCpu}%, RAM ${newRam}MB, Disk ${newDisk}MB, Servers ${newServers}${reason ? ` - Reason: ${reason}` : ''}`);
 
       res.json({
         success: true,
@@ -596,7 +596,7 @@ module.exports.load = async function (app, db) {
   // 5. Unban User
   app.post('/api/v5/user/unban', authenticateApiKey, async (req, res) => {
     try {
-      const { target, moderator } = req.body;
+      const { target, reason, moderator } = req.body;
       const user = await resolveUser(target);
       if (!user) return res.status(404).json({ error: 'User not found' });
 
@@ -620,11 +620,11 @@ module.exports.load = async function (app, db) {
         data: {
           userId: user.id,
           action: 'user:unban',
-          name: `Account unbanned by ${moderator}`
+          name: `Account unbanned by ${moderator}${reason ? `: ${reason}` : ''}`
         }
       });
 
-      log('user unbanned', `${moderator} unbanned ${user.username}`);
+      log('user unbanned', `${moderator} unbanned ${user.username}${reason ? ` - Reason: ${reason}` : ''}`);
 
       res.json({ success: true, username: user.username });
     } catch (error) {
@@ -695,7 +695,7 @@ module.exports.load = async function (app, db) {
   // 8. Control Server Power
   app.post('/api/v5/server/control', authenticateApiKey, async (req, res) => {
     try {
-      const { serverId, action, moderator } = req.body;
+      const { serverId, action, reason, moderator } = req.body;
       if (!serverId) return res.status(400).json({ error: 'Missing serverId' });
       let matchedServer = null;
 
@@ -718,7 +718,7 @@ module.exports.load = async function (app, db) {
 
       await pteroClientApi.post(`/api/client/servers/${resolvedIdentifier}/power`, { signal: action });
 
-      log('server_modified', `${moderator} sent power signal **${action}** to server \`${resolvedIdentifier}\``);
+      log('server_modified', `${moderator} sent power signal **${action}** to server \`${resolvedIdentifier}\`${reason ? ` - Reason: ${reason}` : ''}`);
 
       res.json({ success: true, identifier: resolvedIdentifier });
     } catch (error) {
@@ -729,7 +729,7 @@ module.exports.load = async function (app, db) {
 
   app.post('/api/v5/server/allocation/add', authenticateApiKey, async (req, res) => {
     try {
-      const { serverId, moderator } = req.body;
+      const { serverId, reason, moderator } = req.body;
       if (!serverId) return res.status(400).json({ error: 'Missing serverId' });
       let matchedServer = null;
 
@@ -754,7 +754,7 @@ module.exports.load = async function (app, db) {
       const attributes = response.data.attributes;
 
       const mod = moderator || 'API Client';
-      log('server_modified', `${mod} added port ${attributes.port} to server \`${resolvedIdentifier}\``);
+      log('server_modified', `${mod} added port ${attributes.port} to server \`${resolvedIdentifier}\`${reason ? ` - Reason: ${reason}` : ''}`);
 
       res.json({
         success: true,
@@ -771,6 +771,47 @@ module.exports.load = async function (app, db) {
       console.error('Error adding allocation:', error);
       res.status(500).json({
         error: 'Failed to add allocation',
+        details: error.response?.data || error.message
+      });
+    }
+  });
+
+  
+  // Delete Server
+  app.post('/api/v5/server/delete', authenticateApiKey, async (req, res) => {
+    try {
+      const { serverId, reason, moderator } = req.body;
+      if (!serverId) return res.status(400).json({ error: 'Missing serverId' });
+      let matchedServer = null;
+
+      try {
+        const sInfo = await pteroApi.get(`/api/application/servers/external/${serverId}`);
+        matchedServer = sInfo.data.attributes;
+      } catch (e) {
+        try {
+          const sInfo = await pteroApi.get(`/api/application/servers/${serverId}`);
+          matchedServer = sInfo.data.attributes;
+        } catch (err) {
+          const serversList = await pteroApi.get(`/api/application/servers`);
+          const matched = serversList.data.data.find(s => s.attributes.uuid.startsWith(serverId) || s.attributes.identifier === serverId);
+          if (matched) matchedServer = matched.attributes;
+        }
+      }
+
+      if (!matchedServer) return res.status(404).json({ error: 'Server not found' });
+      const internalId = matchedServer.id;
+      const resolvedIdentifier = matchedServer.identifier;
+
+      // Delete server on Pterodactyl Application API
+      await pteroApi.delete(`/api/application/servers/${internalId}/force`);
+
+      log('server_deleted', `${moderator} deleted server "${matchedServer.name}" (${resolvedIdentifier}) - Reason: ${reason || 'No reason specified'}`);
+
+      res.json({ success: true, identifier: resolvedIdentifier, name: matchedServer.name });
+    } catch (error) {
+      console.error('Error deleting server:', error);
+      res.status(500).json({
+        error: 'Failed to delete server',
         details: error.response?.data || error.message
       });
     }
