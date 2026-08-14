@@ -1,3 +1,5 @@
+const { removeServerSubdomains } = require('./server/subdomains.js');
+const { removeServerRenewal } = require('./server/renewals.js');
 const loadConfig = require("../handlers/config");
 const settings = loadConfig("./config.toml");
 const getPteroUser = require("../handlers/getPteroUser");
