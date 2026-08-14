@@ -916,7 +916,7 @@ module.exports.load = async function (app, db) {
             await pteroApi.delete(`/api/application/servers/${serverId}/force`);
 
             try {
-                await removeServerSubdomains(db, server.attributes.identifier);
+                await removeServerSubdomains(db, [server.attributes.identifier, serverId.toString()]);
             } catch (subdomainError) {
                 console.error('Failed to remove server subdomains:', subdomainError);
             }
@@ -932,7 +932,7 @@ module.exports.load = async function (app, db) {
 
             try {
                 await db.subuserServer.deleteMany({
-                    where: { serverId: server.attributes.identifier }
+                    where: { serverId: { in: [server.attributes.identifier, serverId.toString()] } }
                 });
             } catch (subuserError) {
                 console.error('Failed to remove server subusers:', subuserError);

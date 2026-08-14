@@ -91,8 +91,9 @@ function isValidSubdomainName(name) {
 }
 
 module.exports.removeServerSubdomains = async function (db, serverId) {
+    const serverIds = Array.isArray(serverId) ? serverId.map(String) : [String(serverId)];
     const subdomains = await db.serverSubdomain.findMany({
-        where: { serverId }
+        where: { serverId: { in: serverIds } }
     });
 
     for (const subdomain of subdomains) {
@@ -104,7 +105,7 @@ module.exports.removeServerSubdomains = async function (db, serverId) {
     }
 
     await db.serverSubdomain.deleteMany({
-        where: { serverId }
+        where: { serverId: { in: serverIds } }
     });
 };
 

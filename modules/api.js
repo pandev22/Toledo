@@ -1,5 +1,6 @@
 const { removeServerSubdomains } = require('./server/subdomains.js');
 const { removeServerRenewal } = require('./server/renewals.js');
+const { invalidateOwnershipCache } = require('./server/core.js');
 const loadConfig = require("../handlers/config");
 const settings = loadConfig("./config.toml");
 const getPteroUser = require("../handlers/getPteroUser");
@@ -806,10 +807,45 @@ module.exports.load = async function (app, db) {
 
       // Delete server on Pterodactyl Application API
       await pteroApi.delete(`/api/application/servers/${internalId}/force`);
+      try {
+        await removeServerSubdomains(db, [resolvedIdentifier, internalId.toString()]);
+      } catch (subdomainError) {
+        console.error('Failed to remove server subdomains:', subdomainError);
+      }
 
-      log('server_deleted', `${moderator} deleted server "${matchedServer.name}" (${resolvedIdentifier}) - Reason: ${reason || 'No reason specified'}`);
+      try {
+        await removeServerRenewal(db, {
+          identifier: resolvedIdentifier,
+          panelId: internalId
+        });
+      } catch (renewalError) {
+        console.error('Failed to remove server renewal:', renewalError);
+      }
 
-      res.json({ success: true, identifier: resolvedIdentifier, name: matchedServer.name });
+      try {
+        await db.subuserServer.deleteMany({
+          where: {
+            serverId: { in: [resolvedIdentifier, internalId.toString()] }
+          }
+        });
+     } catch (subuserError) {
+       console.error('Failed to remove server subusers:', subuserError);
+     }
+
+      try {
+        const owner = await db.user.findUnique({ where: { pterodactylId: matchedServer.user } });
+        if (owner) {
+          await cache.del(`ptero:user:${owner.id}:servers`);
+          invalidateOwnershipCache(owner.id);
+        }
+      } catch (cacheErr) {
+        console.error('Failed to invalidate owner server cache:', cacheErr);
+      }
+
+      const mod = moderator || 'API Client';
+      log('server_deleted', `${mod} deleted server "${matchedServer.name}" (${resolvedIdentifier}) - Reason: ${reason || 'No reason specified'}`);
+
+     res.json({ success: true, identifier: resolvedIdentifier, name: matchedServer.name });
     } catch (error) {
       console.error('Error deleting server:', error);
       res.status(500).json({
