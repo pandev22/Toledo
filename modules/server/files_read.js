@@ -37,11 +37,19 @@ module.exports.load = async function (app, db) {
   router.get("/server/:id/files/contents", isAuthenticated, ownsServer, async (req, res) => {
     try {
       const serverId = req.params.id;
-      const file = encodeURIComponent(req.query.file); // URL-encode the file path
+      let file = String(req.query.file || "").trim();
+      if (!file) {
+        return res.status(400).json({ error: "File parameter is required" });
+      }
+      file = file.replace(/\/+/g, '/').replace(/\/+$/, '');
+      if (!file) {
+        return res.status(400).json({ error: "Invalid file path" });
+      }
 
       const response = await axios.get(
-        `${PANEL_URL}/api/client/servers/${serverId}/files/contents?file=${file}`,
+        `${PANEL_URL}/api/client/servers/${serverId}/files/contents`,
         {
+          params: { file },
           headers: {
             Authorization: `Bearer ${API_KEY}`,
             Accept: "application/json",
@@ -54,8 +62,14 @@ module.exports.load = async function (app, db) {
       // Send the raw file content back to the client
       res.send(response.data);
     } catch (error) {
-      console.error("Error getting file contents:", error);
-      res.status(500).json({ error: "Internal server error" });
+      console.error("Error getting file contents:", error?.response?.data || error.message);
+      const status = error?.response?.status || 500;
+      const errorMsg = error?.response?.data?.errors?.[0]?.detail
+        || error?.response?.data?.error
+        || error?.response?.data?.message
+        || error.message
+        || "Internal server error";
+      res.status(status).json({ error: errorMsg });
     }
   });
 
@@ -63,7 +77,10 @@ module.exports.load = async function (app, db) {
   router.get("/server/:id/files/download", isAuthenticated, ownsServer, async (req, res) => {
     try {
       const serverId = req.params.id;
-      const file = req.query.file;
+      let file = String(req.query.file || "").trim().replace(/\/+/g, '/').replace(/\/+$/, '');
+      if (!file) {
+        return res.status(400).json({ error: "File parameter is required" });
+      }
 
       const response = await axios.get(
         `${PANEL_URL}/api/client/servers/${serverId}/files/download`,
@@ -79,8 +96,14 @@ module.exports.load = async function (app, db) {
 
       res.json(response.data);
     } catch (error) {
-      console.error("Error getting download link:", error);
-      res.status(500).json({ error: "Internal server error" });
+      console.error("Error getting download link:", error?.response?.data || error.message);
+      const status = error?.response?.status || 500;
+      const errorMsg = error?.response?.data?.errors?.[0]?.detail
+        || error?.response?.data?.error
+        || error?.response?.data?.message
+        || error.message
+        || "Internal server error";
+      res.status(status).json({ error: errorMsg });
     }
   });
 

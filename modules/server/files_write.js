@@ -41,16 +41,31 @@ module.exports.load = async function (app, db) {
   const router = express.Router();
 
   // POST /api/server/:id/files/write
-  router.post("/server/:id/files/write", isAuthenticated, ownsServer, async (req, res) => {
+  router.post("/server/:id/files/write", isAuthenticated, ownsServer, express.text({ limit: "50mb", type: "*/*" }), async (req, res) => {
     try {
       const serverId = req.params.id;
-      const file = req.query.file;
-      const content = req.body;
+      let file = String(req.query.file || "").trim();
+      if (!file) {
+        return res.status(400).json({ error: "File parameter is required" });
+      }
+
+      file = file.replace(/\/+/g, '/').replace(/\/+$/, '');
+      if (!file) {
+        return res.status(400).json({ error: "Invalid file path" });
+      }
+
+      let content = req.body;
+      if (content === undefined || content === null) {
+        content = "";
+      } else if (typeof content !== "string") {
+        content = typeof content === "object" ? JSON.stringify(content, null, 2) : String(content);
+      }
 
       const response = await axios.post(
-        `${PANEL_URL}/api/client/servers/${serverId}/files/write?file=${file}`,
+        `${PANEL_URL}/api/client/servers/${serverId}/files/write`,
         content,
         {
+          params: { file },
           headers: {
             Authorization: `Bearer ${API_KEY}`,
             Accept: "application/json",
@@ -61,8 +76,13 @@ module.exports.load = async function (app, db) {
 
       // Log response status & text if error
       if (response.status !== 204) {
-        console.error("Error writing file:", response.statusText);
-        return res.status(response.status).json({ error: response.statusText });
+        console.error("Error writing file:", response.status, response.statusText, response.data);
+        const errorMsg = response.data?.errors?.[0]?.detail
+          || response.data?.error
+          || response.data?.message
+          || response.statusText
+          || "Failed to write file";
+        return res.status(response.status).json({ error: errorMsg });
       }
 
       await invalidateFolderSizeCache(serverId);
@@ -71,8 +91,14 @@ module.exports.load = async function (app, db) {
       });
       res.status(204).send();
     } catch (error) {
-      console.error("Error writing file:", error);
-      res.status(500).json({ error: "Internal server error" });
+      console.error("Error writing file:", error?.response?.data || error.message);
+      const status = error?.response?.status || 500;
+      const errorMsg = error?.response?.data?.errors?.[0]?.detail
+        || error?.response?.data?.error
+        || error?.response?.data?.message
+        || error.message
+        || "Internal server error";
+      res.status(status).json({ error: errorMsg });
     }
   });
 
