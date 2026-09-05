@@ -240,7 +240,7 @@ class BillingManager {
             currency: 'eur',
             product_data: {
               name: 'Credit Balance',
-              description: `Ajouter ${amountVal.toFixed(2)} € de crédit à votre compte`,
+              description: `Add ${amountVal.toFixed(2)} € credit to your account`,
             },
             unit_amount: Math.round(amountVal * 100),
           },
