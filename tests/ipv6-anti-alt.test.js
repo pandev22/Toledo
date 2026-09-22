@@ -2,6 +2,7 @@ const assert = require('assert');
 const {
   normalizeIp,
   expandIpv6,
+  isSpecialIpv6,
   getIpv6Subnet64,
   areIpsEquivalent,
   getClientIp,
@@ -14,6 +15,8 @@ assert.strictEqual(normalizeIp('192.168.1.1'), '192.168.1.1');
 assert.strictEqual(normalizeIp('192.168.1.1:8080'), '192.168.1.1');
 assert.strictEqual(normalizeIp('::ffff:192.168.1.1'), '192.168.1.1');
 assert.strictEqual(normalizeIp('::ffff:192.168.1.1:8080'), '192.168.1.1');
+assert.strictEqual(normalizeIp('[::ffff:192.168.1.1]'), '192.168.1.1');
+assert.strictEqual(normalizeIp('[::ffff:192.168.1.1]:8080'), '192.168.1.1');
 assert.strictEqual(normalizeIp('2001:DB8::1'), '2001:db8::1');
 assert.strictEqual(normalizeIp('[2001:db8::1]'), '2001:db8::1');
 assert.strictEqual(normalizeIp('[2001:db8::1]:443'), '2001:db8::1');
@@ -24,10 +27,18 @@ assert.strictEqual(normalizeIp(null), null);
 console.log('✔ normalizeIp passed');
 
 console.log('--- 2. Testing getClientIp ---');
-assert.strictEqual(getClientIp({ headers: { 'cf-connecting-ip': '2001:db8::1' } }), '2001:db8::1');
-assert.strictEqual(getClientIp({ headers: { 'x-real-ip': '10.0.0.1' } }), '10.0.0.1');
-assert.strictEqual(getClientIp({ headers: { 'x-forwarded-for': '172.16.0.1, 10.0.0.1' } }), '172.16.0.1');
+// When behind trusted proxy (req.app.get('trust proxy') is enabled)
+const trustedApp = { get: (key) => key === 'trust proxy' ? 1 : undefined };
+assert.strictEqual(getClientIp({ app: trustedApp, headers: { 'cf-connecting-ip': '2001:db8::1' } }), '2001:db8::1');
+assert.strictEqual(getClientIp({ app: trustedApp, headers: { 'x-real-ip': '10.0.0.1' } }), '10.0.0.1');
+assert.strictEqual(getClientIp({ app: trustedApp, headers: { 'x-forwarded-for': '172.16.0.1, 10.0.0.1' } }), '10.0.0.1');
 assert.strictEqual(getClientIp({ socket: { remoteAddress: '::ffff:192.168.0.5' } }), '192.168.0.5');
+
+// When NOT behind trusted proxy: untrusted forwarded headers must be ignored!
+assert.strictEqual(getClientIp({
+  headers: { 'cf-connecting-ip': '1.2.3.4', 'x-real-ip': '1.2.3.4', 'x-forwarded-for': '1.2.3.4' },
+  socket: { remoteAddress: '192.168.0.5' }
+}), '192.168.0.5', 'Untrusted proxy headers must be ignored when trust proxy is not configured');
 console.log('✔ getClientIp passed');
 
 console.log('--- 3. Testing areIpsEquivalent ---');
@@ -35,7 +46,9 @@ assert.strictEqual(areIpsEquivalent('192.168.1.1', '192.168.1.1'), true);
 assert.strictEqual(areIpsEquivalent('192.168.1.1', '192.168.1.2'), false);
 assert.strictEqual(areIpsEquivalent('2001:db8:1234:5678:1::1', '2001:db8:1234:5678:2::2'), true);
 assert.strictEqual(areIpsEquivalent('2001:db8:1234:5678::1', '2001:db8:1234:9999::1'), false);
+assert.strictEqual(areIpsEquivalent('2001:db8::1', '2001:0db8:0000:0000:0000:0000:0000:0002'), true);
 assert.strictEqual(areIpsEquivalent('::1', '::1'), true);
+assert.strictEqual(areIpsEquivalent('::1', '::2'), false, 'Special loopback addresses must not be grouped by /64');
 assert.strictEqual(areIpsEquivalent('::1', '2001:db8::1'), false);
 console.log('✔ areIpsEquivalent passed');
 
@@ -144,7 +157,13 @@ console.log('--- 4. Testing createIpCheck with Mock DB ---');
   assert.strictEqual(r6.allowed, true, 'User 5 from different IPv6 subnet should be allowed');
   console.log('✔ IPv6 different subnet login verified');
 
-  // Test 4.7: IPv6 allowlisted user bypass
+  // Test 4.7: IPv6 legacy compressed record matching
+  ipHistoryRecords.push({ ipAddress: '2001:db8::1', discordId: 'discord-user-legacy', userId: 'user-legacy' });
+  const rLegacyAlt = await ipCheck.checkAndRecordIp('2001:db8::2', 'discord-user-legacy-alt', 'user-legacy-alt');
+  assert.strictEqual(rLegacyAlt.allowed, false, 'Alt login from same /64 with compressed legacy record must be detected');
+  console.log('✔ IPv6 compressed legacy record anti-alt detection verified');
+
+  // Test 4.8: IPv6 allowlisted user bypass
   allowlistRecords.push({ ipAddress: '2a01:cb08:834:100:0000:0000:0000:0001', userId: 'user-6' });
   const r7 = await ipCheck.checkAndRecordIp('2a01:cb08:834:100:ffff:eeee:dddd:cccc', 'discord-user-6', 'user-6');
   assert.strictEqual(r7.allowed, true, 'Allowlisted IPv6 user should bypass check');

@@ -4,6 +4,7 @@ const net = require('net');
 const {
   normalizeIp,
   getIpv6Subnet64,
+  isSpecialIpv6,
   areIpsEquivalent,
   isUserAllowlisted
 } = require('./antiVpnAllowlist');
@@ -40,31 +41,44 @@ function createIpCheck(db) {
     let subnet = null;
 
     if (isIpv6) {
-      subnet = getIpv6Subnet64(normalizedIp);
-      const conditions = [
-        { ipAddress: { startsWith: subnet.expandedPrefix } },
-        { ipAddress: { startsWith: subnet.shortPrefix } },
-        { ipAddress: normalizedIp },
-      ];
-
-      existingRecord = await db.ipHistory.findFirst({
-        where: {
-          OR: conditions,
-          NOT: { discordId },
-        },
-      });
-
-      // Fallback check for any legacy or differently-formatted IPv6 records in the database
-      if (!existingRecord) {
-        const potentialRecords = await db.ipHistory.findMany({
+      if (isSpecialIpv6(normalizedIp)) {
+        // Loopback / special IPv6 must only match exact address, never the /64 subnet
+        existingRecord = await db.ipHistory.findFirst({
           where: {
-            ipAddress: { contains: ':' },
+            ipAddress: normalizedIp,
             NOT: { discordId },
           },
-          take: 50,
-          orderBy: { createdAt: 'desc' }
         });
-        existingRecord = potentialRecords.find(r => areIpsEquivalent(r.ipAddress, normalizedIp)) || null;
+      } else {
+        subnet = getIpv6Subnet64(normalizedIp);
+        const conditions = [
+          { ipAddress: { startsWith: subnet.expandedPrefix } },
+          { ipAddress: { startsWith: subnet.shortPrefix } },
+          { ipAddress: normalizedIp },
+        ];
+
+        if (subnet.compressedPrefix) {
+          conditions.push({ ipAddress: { startsWith: subnet.compressedPrefix } });
+        }
+
+        existingRecord = await db.ipHistory.findFirst({
+          where: {
+            OR: conditions,
+            NOT: { discordId },
+          },
+        });
+
+        // Fallback check for any legacy IPv6 records matching subnet equivalence
+        if (!existingRecord) {
+          const potentialRecords = await db.ipHistory.findMany({
+            where: {
+              ipAddress: { contains: ':' },
+              NOT: { discordId },
+            },
+            orderBy: { createdAt: 'desc' }
+          });
+          existingRecord = potentialRecords.find(r => areIpsEquivalent(r.ipAddress, normalizedIp)) || null;
+        }
       }
     } else {
       existingRecord = await db.ipHistory.findFirst({
@@ -102,7 +116,7 @@ function createIpCheck(db) {
     }
 
     // For IPv6, record the expanded address so indexed prefix matching works across all devices in the /64 subnet
-    const recordIp = isIpv6 && subnet ? subnet.expanded : normalizedIp;
+    const recordIp = isIpv6 && subnet && !isSpecialIpv6(normalizedIp) ? subnet.expanded : normalizedIp;
 
     await db.ipHistory.upsert({
       where: {

@@ -1,10 +1,23 @@
 const axios = require("axios");
-const { normalizeIp } = require("./antiVpnAllowlist");
+const net = require("net");
+const { normalizeIp, getIpv6Subnet64 } = require("./antiVpnAllowlist");
 
 module.exports = async (key, db, ip, res) => {
+  if (!ip) {
+    return { blocked: false, ip: null };
+  }
+
   const cleanIp = normalizeIp(ip) || ip;
+  if (!cleanIp) {
+    return { blocked: false, ip: null };
+  }
+
+  const isV6 = net.isIP(cleanIp) === 6;
+  const subnet = isV6 ? getIpv6Subnet64(cleanIp) : null;
+  // Use /64 subnet prefix for IPv6 cache key so privacy rotations (RFC 4941) hit cache
+  const cacheKey = subnet ? `vpncheckcache-v6-${subnet.expandedPrefix}` : `vpncheckcache-${cleanIp}`;
+
   let ipcache = null;
-  const cacheKey = `vpncheckcache-${cleanIp}`;
   const row = await db.heliactyl.findUnique({ where: { key: cacheKey } });
   if (row) {
     try {
@@ -63,7 +76,9 @@ module.exports = async (key, db, ip, res) => {
 module.exports.checkAndBlock = async (key, db, ip, res) => {
   const result = await module.exports(key, db, ip);
   if (result.blocked) {
-    res.send('VPN Detected! Please disable your VPN to continue.');
+    if (res && typeof res.send === 'function') {
+      res.send('VPN Detected! Please disable your VPN to continue.');
+    }
     return true;
   }
   return false;

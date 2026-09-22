@@ -6,6 +6,9 @@ const net = require('net');
  */
 function expandIpv6(ip) {
   if (!ip || net.isIP(ip) !== 6) return null;
+  // If IPv4-mapped, do not expand as pure IPv6
+  if (ip.includes('.')) return null;
+
   const lower = ip.toLowerCase();
   let full;
   if (lower.includes('::')) {
@@ -22,12 +25,30 @@ function expandIpv6(ip) {
 }
 
 /**
+ * Check if an IPv6 address is a special address that should not be grouped by /64
+ * (e.g. loopback ::1, unspecified ::, or link-local fe80::)
+ */
+function isSpecialIpv6(ip) {
+  const norm = normalizeIp(ip);
+  if (!norm || net.isIP(norm) !== 6) return false;
+  const exp = expandIpv6(norm);
+  if (!exp) return false;
+  // ::1 loopback
+  if (exp === '0000:0000:0000:0000:0000:0000:0000:0001') return true;
+  // :: unspecified
+  if (exp === '0000:0000:0000:0000:0000:0000:0000:0000') return true;
+  // fe80::/10 link-local
+  if (exp.toLowerCase().startsWith('fe80:')) return true;
+  return false;
+}
+
+/**
  * Clean and normalize any IP address (IPv4 or IPv6).
  * Handles:
  * - Arrays or comma-separated proxy headers (takes client IP)
  * - Quotes and whitespace
  * - IPv4-mapped IPv6 (::ffff:192.168.1.1)
- * - Bracketed IPv6 ([2001:db8::1] or [2001:db8::1]:443)
+ * - Bracketed IPv6 ([2001:db8::1] or [2001:db8::1]:443, [::ffff:192.168.1.1])
  * - IPv4 with port (1.2.3.4:8080)
  */
 function normalizeIp(ipAddress) {
@@ -35,8 +56,8 @@ function normalizeIp(ipAddress) {
 
   let str = String(ipAddress).split(',')[0].trim().replace(/^["']+|["']+$/g, '');
 
-  // Strip brackets from bracketed IPv6 (with or without port)
-  const bracketMatch = str.match(/^\[([a-fA-F0-9:]+)\](?::\d+)?$/);
+  // Strip brackets from bracketed IPv6 (with or without port, including IPv4-mapped)
+  const bracketMatch = str.match(/^\[([a-fA-F0-9:.]+)\](?::\d+)?$/);
   if (bracketMatch) {
     str = bracketMatch[1];
   }
@@ -71,8 +92,19 @@ function getIpv6Subnet64(ip) {
   if (!expanded) return null;
   const parts = expanded.split(':');
   const expandedPrefix = parts.slice(0, 4).join(':') + ':';
-  const shortPrefix = parts.slice(0, 4).map(p => p.replace(/^0+/, '') || '0').join(':') + ':';
-  return { expanded, expandedPrefix, shortPrefix };
+  const shortParts = parts.slice(0, 4).map(p => p.replace(/^0+/, '') || '0');
+  const shortPrefix = shortParts.join(':') + ':';
+
+  // Compute compressed prefix if ends with trailing zeros (e.g. 2001:db8:0:0: -> 2001:db8::)
+  let compressedPrefix = null;
+  const unpaddedStr = shortParts.join(':');
+  if (unpaddedStr.endsWith(':0:0')) {
+    compressedPrefix = unpaddedStr.slice(0, -4) + '::';
+  } else if (unpaddedStr.endsWith(':0')) {
+    compressedPrefix = unpaddedStr.slice(0, -2) + '::';
+  }
+
+  return { expanded, expandedPrefix, shortPrefix, compressedPrefix };
 }
 
 /**
@@ -90,6 +122,10 @@ function areIpsEquivalent(ip1, ip2) {
   const v1 = net.isIP(n1);
   const v2 = net.isIP(n2);
   if (v1 === 6 && v2 === 6) {
+    // Special addresses (loopback, link-local) must never be grouped by /64
+    if (isSpecialIpv6(n1) || isSpecialIpv6(n2)) {
+      return n1 === n2;
+    }
     const s1 = getIpv6Subnet64(n1);
     const s2 = getIpv6Subnet64(n2);
     if (s1 && s2 && s1.expandedPrefix === s2.expandedPrefix) {
@@ -101,20 +137,47 @@ function areIpsEquivalent(ip1, ip2) {
 }
 
 /**
- * Retrieve the client IP address from the Express request,
- * inspecting Cloudflare, reverse proxy (Nginx), and direct socket headers.
+ * Retrieve the client IP address from the Express request.
+ * Only trusts proxy headers when Express trust proxy is configured,
+ * otherwise safely defaults to the direct socket address.
  */
 function getClientIp(req) {
   if (!req) return null;
 
-  const rawIp =
-    req.headers?.['cf-connecting-ip'] ||
-    req.headers?.['x-real-ip'] ||
-    (req.headers?.['x-forwarded-for'] ? String(req.headers['x-forwarded-for']).split(',')[0] : null) ||
-    req.ip ||
-    req.socket?.remoteAddress;
+  // 1. If Express resolved req.ip (e.g. app.set('trust proxy', 1)), use it if valid
+  if (req.ip) {
+    const norm = normalizeIp(req.ip);
+    if (norm) return norm;
+  }
 
-  return normalizeIp(rawIp);
+  const socketIp = normalizeIp(req.socket?.remoteAddress);
+
+  // 2. Only inspect forwarded proxy headers if the request is from a trusted proxy setup
+  const trustProxyConfig = req.app?.get?.('trust proxy');
+  if (trustProxyConfig) {
+    if (req.headers?.['cf-connecting-ip']) {
+      const cfIp = normalizeIp(req.headers['cf-connecting-ip']);
+      if (cfIp) return cfIp;
+    }
+
+    if (req.headers?.['x-real-ip']) {
+      const realIp = normalizeIp(req.headers['x-real-ip']);
+      if (realIp) return realIp;
+    }
+
+    if (req.headers?.['x-forwarded-for']) {
+      const hops = String(req.headers['x-forwarded-for'])
+        .split(',')
+        .map(s => s.trim())
+        .filter(Boolean);
+      // Select candidate counting from the right (closest untrusted hop)
+      const candidate = hops[hops.length - 1] || hops[0];
+      const normForwarded = normalizeIp(candidate);
+      if (normForwarded) return normForwarded;
+    }
+  }
+
+  return socketIp;
 }
 
 /**
@@ -174,6 +237,7 @@ async function isUserAllowlisted(db, ipAddress, userId) {
 module.exports = {
   normalizeIp,
   expandIpv6,
+  isSpecialIpv6,
   getIpv6Subnet64,
   areIpsEquivalent,
   getClientIp,

@@ -229,18 +229,21 @@ class BillingManager {
     return true;
   }
 
-  async createCheckoutSession(userId, amount_eur, userEmail) {
-    const amountVal = parseFloat(amount_eur);
+  async createCheckoutSession(userId, amount, userEmail, currency = 'eur') {
+    const amountVal = parseFloat(amount);
+    const curr = (currency || 'eur').toLowerCase();
+    const isEur = curr === 'eur';
+    const desc = isEur ? "Add " + amountVal.toFixed(2) + " € credit to your account" : "Add $" + amountVal.toFixed(2) + " credit to your account";
     const session = await getStripe().checkout.sessions.create({
       customer_email: userEmail,
       payment_method_types: ['card', 'link', 'paypal'],
       line_items: [
         {
           price_data: {
-            currency: 'eur',
+            currency: curr,
             product_data: {
               name: 'Credit Balance',
-              description: `Add ${amountVal.toFixed(2)} € credit to your account`,
+              description: desc,
             },
             unit_amount: Math.round(amountVal * 100),
           },
@@ -253,8 +256,10 @@ class BillingManager {
       metadata: {
         userId: userId,
         type: 'credit_purchase',
-        amount_eur: amountVal,
-        currency: 'EUR'
+        amount_eur: isEur ? amountVal : undefined,
+        amount_usd: !isEur ? amountVal : undefined,
+        amount: amountVal,
+        currency: curr.toUpperCase()
       },
     });
 
@@ -281,6 +286,7 @@ module.exports.load = async function (app, db) {
       res.json({
         balances: {
           credit_eur: creditBalance,
+          credit_usd: creditBalance, // Backward compatibility for frontend
           coins: coinBalance
         },
         currency: 'EUR',
@@ -296,12 +302,14 @@ module.exports.load = async function (app, db) {
   // Create checkout session for adding credit
   router.post('/billing/checkout', validate(schemas.billingCheckout), async (req, res) => {
     try {
-      const { amount_eur } = req.body;
+      const amount = req.body.amount_eur !== undefined ? req.body.amount_eur : req.body.amount_usd;
+      const currency = (req.body.amount_usd !== undefined && req.body.amount_eur === undefined) ? 'usd' : 'eur';
 
       const session = await billingManager.createCheckoutSession(
         req.session.userinfo.id,
-        amount_eur,
-        req.session.userinfo.email
+        amount,
+        req.session.userinfo.email,
+        currency
       );
 
       res.json({
@@ -335,7 +343,8 @@ module.exports.load = async function (app, db) {
         return res.status(403).json({ error: 'Unauthorized payment session' });
       }
 
-      const amountEur = parseFloat(session.metadata.amount_eur);
+      const currency = (session.metadata.currency || (session.metadata.amount_usd ? 'USD' : 'EUR')).toUpperCase();
+      const amountVal = parseFloat(session.metadata.amount_eur || session.metadata.amount_usd || session.metadata.amount || (session.amount_total / 100));
 
       // --- Capture payment method & customer details from Stripe ---
       let paymentMethodLabel = 'Card';
@@ -378,14 +387,16 @@ module.exports.load = async function (app, db) {
       // Enrich transaction details
       const transactionDetails = {
         checkout_session: session_id,
-        amount_eur: amountEur,
-        currency: 'EUR',
+        amount_eur: currency === 'EUR' ? amountVal : undefined,
+        amount_usd: currency === 'USD' ? amountVal : undefined,
+        amount: amountVal,
+        currency,
         first_name: firstName,
         last_name: lastName,
         payment_method: paymentMethodLabel,
         item_type: 'credit',
         quantity: 1,
-        unit_price: amountEur
+        unit_price: amountVal
       };
 
       // Add credit and log transaction atomically
@@ -398,15 +409,15 @@ module.exports.load = async function (app, db) {
 
         await tx.user.update({
           where: { id: req.session.userinfo.id },
-          data: { creditUsd: { increment: amountEur } }
+          data: { creditUsd: { increment: amountVal } }
         });
 
         await tx.transaction.create({
           data: {
             userId: req.session.userinfo.id,
             type: 'purchase',
-            amount: Math.round(amountEur * 100),
-            description: `Credit Top-up (${amountEur.toFixed(2)} €)`,
+            amount: Math.round(amountVal * 100),
+            description: currency === 'USD' ? ("Credit Top-up ($" + amountVal.toFixed(2) + ")") : ("Credit Top-up (" + amountVal.toFixed(2) + " €)"),
             details: JSON.stringify(transactionDetails),
             externalId: session_id
           }
@@ -422,8 +433,9 @@ module.exports.load = async function (app, db) {
         success: true,
         transaction: {
           id: session_id,
-          amount_eur: amountEur,
-          currency: 'EUR',
+          amount_eur: currency === 'EUR' ? amountVal : undefined,
+          amount_usd: currency === 'USD' ? amountVal : undefined,
+          currency,
           date: new Date().toISOString(),
           status: 'completed',
           method: paymentMethodLabel
@@ -658,24 +670,34 @@ module.exports.load = async function (app, db) {
         .filter(t => {
           // Include credit top-ups (have amount_eur), coin purchases (have package_amount), or bundle purchases
           const d = t.details;
-          return d?.amount_eur || d?.package_amount || d?.bundle;
+          return d?.amount_eur !== undefined || d?.amount_usd !== undefined || d?.package_amount || d?.bundle;
         })
         .map(t => {
           const d = t.details || {};
           let amount = 0;
+          let currency = d.currency;
           if (d.amount_eur !== undefined) {
             amount = d.amount_eur;
+            currency = currency || 'EUR';
           } else if (d.price_eur !== undefined) {
             amount = d.price_eur;
+            currency = currency || 'EUR';
+          } else if (d.amount_usd !== undefined) {
+            amount = d.amount_usd;
+            currency = currency || 'USD';
+          } else if (d.price_usd !== undefined) {
+            amount = d.price_usd;
+            currency = currency || 'USD';
           } else {
             amount = Math.abs(t.amount) / 100;
+            currency = currency || 'EUR';
           }
 
           return {
             id: t.id,
             date: t.createdAt.toISOString(),
             amount,
-            currency: d.currency || 'EUR',
+            currency: currency || 'EUR',
             description: t.description
           };
         });

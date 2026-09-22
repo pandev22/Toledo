@@ -270,30 +270,38 @@ class BundleManager {
           try { await this.assignDiscordRole(pack.userId); } catch {}
         }
 
-        // Create wallet transaction for the renewal in EUR
+        // Create wallet transaction for the renewal
         const chargedAmount = invoice.amount_paid ? invoice.amount_paid / 100 : price;
-        await this.db.transaction.create({
-          data: {
-            userId: pack.userId,
-            type: 'purchase',
-            amount: Math.round(chargedAmount * 100),
-            description: `Renewal: ${pack.type.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}`,
-            details: JSON.stringify({
-              bundle_type: pack.type,
-              bundle: pack.type,
-              price_eur: chargedAmount,
-              currency: 'EUR',
-              payment_method: 'Stripe Subscription',
-              item_type: 'subscription_renewal',
-              quantity: 1,
-              unit_price: chargedAmount,
-              stripe_invoice_id: invoice.id,
-              renewal: true
-            })
-          }
-        });
+        const currency = (invoice.currency || "eur").toUpperCase();
+        const renewalTxId = "renewal_" + invoice.id;
+        const existingTx = await this.db.transaction.findUnique({ where: { externalId: renewalTxId } });
+        if (!existingTx) {
+          await this.db.transaction.create({
+            data: {
+              userId: pack.userId,
+              type: "purchase",
+              amount: invoice.amount_paid || Math.round(chargedAmount * 100),
+              description: "Renewal: " + pack.type.replace(/_/g, " ").replace(/\b\w/g, l => l.toUpperCase()),
+              details: JSON.stringify({
+                bundle_type: pack.type,
+                bundle: pack.type,
+                price_eur: currency === "EUR" ? chargedAmount : undefined,
+                price_usd: currency === "USD" ? chargedAmount : undefined,
+                amount: chargedAmount,
+                currency,
+                payment_method: "Stripe Subscription",
+                item_type: "subscription_renewal",
+                quantity: 1,
+                unit_price: chargedAmount,
+                stripe_invoice_id: invoice.id,
+                renewal: true
+              }),
+              externalId: renewalTxId
+            }
+          });
+        }
 
-        console.log(`[BUNDLES] Renewal payment succeeded: invoice ${invoice.id} for user ${pack.userId}: €${chargedAmount} - extended to ${periodEnd.toISOString()}`);
+        console.log("[BUNDLES] Renewal payment succeeded: invoice " + invoice.id + " for user " + pack.userId + ": " + chargedAmount + " " + currency + " - extended to " + periodEnd.toISOString());
         break;
       }
       case 'invoice.payment_failed': {
@@ -305,8 +313,7 @@ class BundleManager {
           where: { stripeSubscriptionId: subId }
         });
         if (pack) {
-          await this.cancelSubscriptionPacks(subId, pack.userId, pack.type === 'god_pack', pack.type === 'upgraded_pack' || pack.type === 'god_pack');
-          console.log(`[BUNDLES] Renewal invoice ${invoice.id} payment failed: cancelled subscription ${subId} and revoked all perks for user ${pack.userId}`);
+          console.warn("[BUNDLES] Renewal invoice " + invoice.id + " payment failed for user " + pack.userId + "; waiting for Stripe retries");
         }
         break;
       }
@@ -328,7 +335,7 @@ class BundleManager {
         });
         if (!pack) break;
 
-        if (['canceled', 'incomplete_expired', 'unpaid', 'past_due'].includes(s.status)) {
+        if (['canceled', 'incomplete_expired', 'unpaid'].includes(s.status)) {
           await this.cancelSubscriptionPacks(s.id, pack.userId, pack.type === 'god_pack', pack.type === 'upgraded_pack' || pack.type === 'god_pack');
           console.log(`[BUNDLES] Subscription ${s.id} updated to ${s.status}: cancelled perks for user ${pack.userId}`);
         } else if (['active', 'trialing'].includes(s.status) && s.current_period_end) {
@@ -514,46 +521,73 @@ class BundleManager {
     try {
       const expired = await this.db.userPack.findMany({ where: { status: 'active', expiresAt: { lte: new Date() } } });
       for (const p of expired) {
-        const needsDowngrade = p.type === 'upgraded_pack' || p.type === 'god_pack';
-        const isAuto = p.type === 'auto_renew' || p.type === 'god_pack';
-        const isGod = p.type === 'god_pack';
+        // Re-read fresh record from DB to avoid acting on stale snapshot
+        const freshPack = await this.db.userPack.findUnique({ where: { id: p.id } });
+        if (!freshPack || freshPack.status !== 'active' || freshPack.expiresAt > new Date()) {
+          continue;
+        }
+
+        // If subsidiary entry of an active God Pack, sync expiry instead of expiring
+        if (!freshPack.stripeSubscriptionId && ['auto_renew', 'upgraded_pack'].includes(freshPack.type)) {
+          const userGodPack = await this.db.userPack.findFirst({
+            where: { userId: freshPack.userId, type: 'god_pack', status: 'active' }
+          });
+          if (userGodPack && userGodPack.expiresAt > new Date()) {
+            await this.db.userPack.update({
+              where: { id: freshPack.id },
+              data: { expiresAt: userGodPack.expiresAt }
+            });
+            continue;
+          }
+        }
 
         // Check if Stripe subscription was renewed before expiring
-        if (p.stripeSubscriptionId) {
+        if (freshPack.stripeSubscriptionId) {
           try {
-            const sub = await getStripe().subscriptions.retrieve(p.stripeSubscriptionId);
+            const sub = await getStripe().subscriptions.retrieve(freshPack.stripeSubscriptionId);
             if (['active', 'trialing'].includes(sub.status) && sub.current_period_end) {
               const newExp = new Date(sub.current_period_end * 1000);
               if (newExp > new Date()) {
-                await this.db.userPack.update({ where: { id: p.id }, data: { expiresAt: newExp } });
-                if (isGod) {
+                await this.db.userPack.update({ where: { id: freshPack.id }, data: { expiresAt: newExp } });
+                if (freshPack.type === 'god_pack') {
                   await this.db.userPack.updateMany({
-                    where: { userId: p.userId, type: { in: ['auto_renew', 'upgraded_pack'] }, stripeSubscriptionId: null },
+                    where: { userId: freshPack.userId, type: { in: ['auto_renew', 'upgraded_pack'] }, stripeSubscriptionId: null },
                     data: { status: 'active', expiresAt: newExp }
                   });
-                  try { await this.assignDiscordRole(p.userId); } catch {}
+                  try { await this.assignDiscordRole(freshPack.userId); } catch {}
                 }
-                console.log(`[BUNDLES] Pack ${p.id} renewed via Stripe until ${newExp.toISOString()}`);
+                console.log("[BUNDLES] Pack " + freshPack.id + " renewed via Stripe until " + newExp.toISOString());
                 continue; // Preserved active
               }
             }
           } catch (err) {
-            console.error(`[BUNDLES] Error checking Stripe renewal for ${p.stripeSubscriptionId}:`, err.message);
+            console.error("[BUNDLES] Error checking Stripe renewal for " + freshPack.stripeSubscriptionId + ":", err.message);
           }
         }
 
+        const isGod = freshPack.type === 'god_pack';
+        const needsDowngrade = freshPack.type === 'upgraded_pack' || freshPack.type === 'god_pack';
+        const isAuto = freshPack.type === 'auto_renew' || freshPack.type === 'god_pack';
+
         if (isGod) {
-          try { await this.removeDiscordRole(p.userId); } catch {}
+          try { await this.removeDiscordRole(freshPack.userId); } catch {}
           await this.db.userPack.updateMany({
-            where: { userId: p.userId, status: 'active', type: { in: ['auto_renew', 'upgraded_pack'] }, expiresAt: { lte: new Date() } },
+            where: { userId: freshPack.userId, status: 'active', type: { in: ['auto_renew', 'upgraded_pack'] }, expiresAt: { lte: new Date() } },
             data: { status: 'expired' }
           });
         }
 
-        await this.db.userPack.update({ where: { id: p.id }, data: { status: 'expired' } });
+        await this.db.userPack.update({ where: { id: freshPack.id }, data: { status: 'expired' } });
 
-        if (needsDowngrade) { try { await this.downgradeUserServerResources(p.userId); } catch {} }
-        if (isAuto) { try { await this.forceUserRenewalCheck(p.userId); } catch {} }
+        if (needsDowngrade) {
+          const remainingGod = await this.db.userPack.findFirst({
+            where: { userId: freshPack.userId, type: 'god_pack', status: 'active' }
+          });
+          if (!remainingGod) {
+            try { await this.downgradeUserServerResources(freshPack.userId); } catch {}
+          }
+        }
+        if (isAuto) { try { await this.forceUserRenewalCheck(freshPack.userId); } catch {} }
       }
     } catch (e) { console.error('[BUNDLES] Expiry check error:', e); }
   }
@@ -581,7 +615,7 @@ class BundleManager {
           const sub = await getStripe().subscriptions.retrieve(pack.stripeSubscriptionId);
           const status = sub.status;
 
-          if (['canceled', 'incomplete_expired', 'unpaid', 'past_due', 'paused'].includes(status)) {
+          if (['canceled', 'incomplete_expired', 'unpaid'].includes(status)) {
             await this.cancelSubscriptionPacks(pack.stripeSubscriptionId, pack.userId, pack.type === 'god_pack', pack.type === 'upgraded_pack' || pack.type === 'god_pack');
             console.log(`[BUNDLES] Stripe verification: sub ${pack.stripeSubscriptionId} (${status}) -> cancelled`);
           } else if (['active', 'trialing'].includes(status) && sub.current_period_end) {
