@@ -22,6 +22,7 @@ database = "heliactyl.db"
 [website]
 name = "heliactyl" # Website/dashboard name
 logo = "https://i.imgur.com/6ykl8tF.png"
+host = "0.0.0.0" # "0.0.0.0" for IPv4, or "::" for dual-stack IPv4 + IPv6
 port = 17_000 # Default: 25_001
 secret = "CHANGE_THIS_SECRET" # Change this - do not run Heliactyl in production with the default secret
 domain = "http://localhost:17000"
