@@ -50,6 +50,17 @@ assert.strictEqual(areIpsEquivalent('2001:db8::1', '2001:0db8:0000:0000:0000:000
 assert.strictEqual(areIpsEquivalent('::1', '::1'), true);
 assert.strictEqual(areIpsEquivalent('::1', '::2'), false, 'Special loopback addresses must not be grouped by /64');
 assert.strictEqual(areIpsEquivalent('::1', '2001:db8::1'), false);
+// Link-local range fe80::/10 (fe80 through febf)
+assert.strictEqual(isSpecialIpv6('fe80::1'), true, 'fe80 is link-local');
+assert.strictEqual(isSpecialIpv6('fe81::1'), true, 'fe81 is link-local');
+assert.strictEqual(isSpecialIpv6('fe9a::1'), true, 'fe9a is link-local');
+assert.strictEqual(isSpecialIpv6('febf::1'), true, 'febf is link-local');
+assert.strictEqual(isSpecialIpv6('fec0::1'), false, 'fec0 is not in fe80::/10');
+assert.strictEqual(areIpsEquivalent('fe80::1', 'fe80::2'), false, 'fe80 link-local addresses must not be grouped by /64');
+assert.strictEqual(areIpsEquivalent('fe81::1', 'fe81::2'), false, 'fe81 link-local addresses must not be grouped by /64');
+assert.strictEqual(areIpsEquivalent('febf::1', 'febf::2'), false, 'febf link-local addresses must not be grouped by /64');
+assert.strictEqual(areIpsEquivalent('fe80::1', 'fe80::1'), true);
+assert.strictEqual(areIpsEquivalent('fe81::1', 'fe81::1'), true);
 console.log('✔ areIpsEquivalent passed');
 
 console.log('--- 4. Testing createIpCheck with Mock DB ---');

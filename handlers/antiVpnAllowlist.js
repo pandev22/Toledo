@@ -37,8 +37,9 @@ function isSpecialIpv6(ip) {
   if (exp === '0000:0000:0000:0000:0000:0000:0000:0001') return true;
   // :: unspecified
   if (exp === '0000:0000:0000:0000:0000:0000:0000:0000') return true;
-  // fe80::/10 link-local
-  if (exp.toLowerCase().startsWith('fe80:')) return true;
+  // fe80::/10 link-local (covers fe80:: through febf::)
+  const firstWord = parseInt(exp.split(':')[0], 16);
+  if ((firstWord & 0xffc0) === 0xfe80) return true;
   return false;
 }
 
