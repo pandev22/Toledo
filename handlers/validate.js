@@ -170,8 +170,8 @@ const schemas = {
       .min(1, 'Minimum amount is $1')
       .max(1000, 'Maximum amount is $1000')
       .optional()
-  }).refine(data => data.amount_eur !== undefined || data.amount_usd !== undefined, {
-    message: 'Amount is required'
+  }).refine(data => (data.amount_eur !== undefined) !== (data.amount_usd !== undefined), {
+    message: 'Specify exactly one amount currency'
   }),
 
   // User ID parameter

@@ -125,7 +125,7 @@ function areIpsEquivalent(ip1, ip2) {
   if (v1 === 6 && v2 === 6) {
     // Special addresses (loopback, link-local) must never be grouped by /64
     if (isSpecialIpv6(n1) || isSpecialIpv6(n2)) {
-      return n1 === n2;
+      return expandIpv6(n1) === expandIpv6(n2);
     }
     const s1 = getIpv6Subnet64(n1);
     const s2 = getIpv6Subnet64(n2);

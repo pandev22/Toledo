@@ -42,7 +42,8 @@ function getBundleConfig() {
     godPackPrice: parseFloat(b.god_pack_price) || 5.49,
     godPackRoleId: String(b.god_pack_role_id || "000000000000000000"),
     subscriptionDays: parseInt(b.subscription_days, 10) || 30,
-    mantleBundleCard: b.mantle_bundle_card !== false
+    mantleBundleCard: b.mantle_bundle_card !== false,
+    retryGraceDays: parseInt(b.retry_grace_days, 10) || 3
   };
 }
 
@@ -271,7 +272,8 @@ class BundleManager {
         }
 
         // Create wallet transaction for the renewal
-        const chargedAmount = invoice.amount_paid ? invoice.amount_paid / 100 : price;
+        const paidCents = invoice.amount_paid ?? Math.round(price * 100);
+        const chargedAmount = paidCents / 100;
         const currency = (invoice.currency || "eur").toUpperCase();
         const renewalTxId = "renewal_" + invoice.id;
         const existingTx = await this.db.transaction.findUnique({ where: { externalId: renewalTxId } });
@@ -280,7 +282,7 @@ class BundleManager {
             data: {
               userId: pack.userId,
               type: "purchase",
-              amount: invoice.amount_paid || Math.round(chargedAmount * 100),
+              amount: paidCents,
               description: "Renewal: " + pack.type.replace(/_/g, " ").replace(/\b\w/g, l => l.toUpperCase()),
               details: JSON.stringify({
                 bundle_type: pack.type,
@@ -559,6 +561,16 @@ class BundleManager {
                 console.log("[BUNDLES] Pack " + freshPack.id + " renewed via Stripe until " + newExp.toISOString());
                 continue; // Preserved active
               }
+            } else if (sub.status === 'past_due') {
+              // Bounded grace period during Stripe dunning retry cycle
+              const cfg = getBundleConfig();
+              const graceMs = (cfg.retryGraceDays || 3) * DAY_MS;
+              const periodEndMs = sub.current_period_end ? sub.current_period_end * 1000 : new Date(freshPack.expiresAt).getTime();
+              const graceDeadline = new Date(periodEndMs + graceMs);
+              if (graceDeadline > new Date()) {
+                console.log("[BUNDLES] Pack " + freshPack.id + " is past_due: preserving perks within grace period until " + graceDeadline.toISOString());
+                continue; // Defer expiration during retry window
+              }
             }
           } catch (err) {
             console.error("[BUNDLES] Error checking Stripe renewal for " + freshPack.stripeSubscriptionId + ":", err.message);
@@ -618,6 +630,14 @@ class BundleManager {
           if (['canceled', 'incomplete_expired', 'unpaid'].includes(status)) {
             await this.cancelSubscriptionPacks(pack.stripeSubscriptionId, pack.userId, pack.type === 'god_pack', pack.type === 'upgraded_pack' || pack.type === 'god_pack');
             console.log(`[BUNDLES] Stripe verification: sub ${pack.stripeSubscriptionId} (${status}) -> cancelled`);
+          } else if (status === 'past_due') {
+            const cfg = getBundleConfig();
+            const graceMs = (cfg.retryGraceDays || 3) * DAY_MS;
+            const periodEndMs = sub.current_period_end ? sub.current_period_end * 1000 : Date.now();
+            if (Date.now() > periodEndMs + graceMs) {
+              await this.cancelSubscriptionPacks(pack.stripeSubscriptionId, pack.userId, pack.type === 'god_pack', pack.type === 'upgraded_pack' || pack.type === 'god_pack');
+              console.log(`[BUNDLES] Stripe verification: sub ${pack.stripeSubscriptionId} past_due and exceeded grace window -> cancelled`);
+            }
           } else if (['active', 'trialing'].includes(status) && sub.current_period_end) {
             const periodEnd = new Date(sub.current_period_end * 1000);
             if (periodEnd > new Date()) {

@@ -61,6 +61,9 @@ assert.strictEqual(areIpsEquivalent('fe81::1', 'fe81::2'), false, 'fe81 link-loc
 assert.strictEqual(areIpsEquivalent('febf::1', 'febf::2'), false, 'febf link-local addresses must not be grouped by /64');
 assert.strictEqual(areIpsEquivalent('fe80::1', 'fe80::1'), true);
 assert.strictEqual(areIpsEquivalent('fe81::1', 'fe81::1'), true);
+// Canonicalization of special addresses across compressed and expanded forms
+assert.strictEqual(areIpsEquivalent('::1', '0000:0000:0000:0000:0000:0000:0000:0001'), true, '::1 must equal expanded loopback');
+assert.strictEqual(areIpsEquivalent('fe80::1', 'fe80:0000:0000:0000:0000:0000:0000:0001'), true, 'fe80::1 must equal expanded link-local');
 console.log('✔ areIpsEquivalent passed');
 
 console.log('--- 4. Testing createIpCheck with Mock DB ---');
@@ -193,3 +196,12 @@ const differentSubnetSessionIp = '2a01:cb08:999:200:aaaa:bbbb:cccc:dddd';
 assert.strictEqual(areIpsEquivalent(sessionIp1, rotatedSessionIp1), true, 'Same /64 must be equivalent in session');
 assert.strictEqual(areIpsEquivalent(sessionIp1, differentSubnetSessionIp), false, 'Different /64 must NOT be equivalent in session');
 console.log('✔ Session IP equivalent logic verified');
+
+
+console.log('--- 6. Testing schemas.billingCheckout validation ---');
+const { schemas } = require('../handlers/validate');
+assert.doesNotThrow(() => schemas.billingCheckout.parse({ amount_eur: 10 }), 'EUR amount only should pass');
+assert.doesNotThrow(() => schemas.billingCheckout.parse({ amount_usd: 10 }), 'USD amount only should pass');
+assert.throws(() => schemas.billingCheckout.parse({ amount_eur: 10, amount_usd: 10 }), /Specify exactly one amount currency/, 'Both EUR and USD should be rejected');
+assert.throws(() => schemas.billingCheckout.parse({}), /Specify exactly one amount currency/, 'Empty object should be rejected');
+console.log('✔ schemas.billingCheckout validation verified');

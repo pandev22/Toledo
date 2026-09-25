@@ -426,7 +426,7 @@ module.exports.load = async function (app, db) {
 
       // Log the successful payment
       log('payment_success',
-        `User ${req.session.userinfo.id} added ${amountEur.toFixed(2)} € credit balance via Stripe Checkout (${paymentMethodLabel})`
+        `User ${req.session.userinfo.id} added ${amountVal.toFixed(2)} ${currency} credit balance via Stripe Checkout (${paymentMethodLabel})`
       );
 
       res.json({

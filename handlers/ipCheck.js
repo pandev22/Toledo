@@ -3,6 +3,7 @@ const AUTO_BAN_ACTOR = 'System (IP mismatch check)';
 const net = require('net');
 const {
   normalizeIp,
+  expandIpv6,
   getIpv6Subnet64,
   isSpecialIpv6,
   areIpsEquivalent,
@@ -42,10 +43,15 @@ function createIpCheck(db) {
 
     if (isIpv6) {
       if (isSpecialIpv6(normalizedIp)) {
-        // Loopback / special IPv6 must only match exact address, never the /64 subnet
+        // Loopback / special IPv6 must only match exact address, querying normalized and expanded canonical forms
+        const expandedSpecial = expandIpv6(normalizedIp);
+        const specialConditions = [{ ipAddress: normalizedIp }];
+        if (expandedSpecial && expandedSpecial !== normalizedIp) {
+          specialConditions.push({ ipAddress: expandedSpecial });
+        }
         existingRecord = await db.ipHistory.findFirst({
           where: {
-            ipAddress: normalizedIp,
+            OR: specialConditions,
             NOT: { discordId },
           },
         });
@@ -75,6 +81,7 @@ function createIpCheck(db) {
               ipAddress: { contains: ':' },
               NOT: { discordId },
             },
+            take: 100,
             orderBy: { createdAt: 'desc' }
           });
           existingRecord = potentialRecords.find(r => areIpsEquivalent(r.ipAddress, normalizedIp)) || null;
@@ -115,8 +122,8 @@ function createIpCheck(db) {
       };
     }
 
-    // For IPv6, record the expanded address so indexed prefix matching works across all devices in the /64 subnet
-    const recordIp = isIpv6 && subnet && !isSpecialIpv6(normalizedIp) ? subnet.expanded : normalizedIp;
+    // Store the canonical expanded address for every IPv6 address
+    const recordIp = isIpv6 ? (expandIpv6(normalizedIp) || normalizedIp) : normalizedIp;
 
     await db.ipHistory.upsert({
       where: {
