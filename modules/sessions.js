@@ -1,9 +1,12 @@
 const path = require('path');
 const sqlite3 = require('sqlite3');
+const { normalizeIp } = require('../handlers/antiVpnAllowlist');
+const loadConfig = require('../handlers/config');
+const settings = loadConfig('./config.toml');
 
 const HeliactylModule = {
   name: 'Sessions',
-  version: '1.0.0',
+  version: '1.1.0',
   api_level: 4,
   target_platform: '10.0.0',
   description: 'Active session management',
@@ -18,83 +21,280 @@ const HeliactylModule = {
 };
 
 const geoCache = new Map();
-const GEO_CACHE_TTL = 1000 * 60 * 60;
+const GEO_CACHE_TTL = 1000 * 60 * 60; // 1 hour for successful location lookups
+const GEO_NEGATIVE_TTL = 1000 * 60 * 2; // 2 minutes for failed/throttled lookups
+const MAX_GEO_CACHE_ENTRIES = 5000;
 
-async function lookupLocation(ip) {
-  if (!ip || ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1') return null;
+function pruneGeoCache(now) {
+  if (geoCache.size > MAX_GEO_CACHE_ENTRIES) {
+    for (const [key, entry] of geoCache.entries()) {
+      const ttl = entry.data ? GEO_CACHE_TTL : GEO_NEGATIVE_TTL;
+      if (now - entry.ts > ttl) {
+        geoCache.delete(key);
+      }
+    }
+    if (geoCache.size > MAX_GEO_CACHE_ENTRIES) {
+      const toDelete = geoCache.size - MAX_GEO_CACHE_ENTRIES;
+      let count = 0;
+      for (const key of geoCache.keys()) {
+        geoCache.delete(key);
+        if (++count >= toDelete) break;
+      }
+    }
+  }
+}
+
+function isPrivateIp(rawIp) {
+  if (!rawIp) return true;
+  const ip = normalizeIp(rawIp) || String(rawIp).trim();
+  if (!ip) return true;
+  if (ip.startsWith('127.') || ip === '::1' || ip.toLowerCase() === 'localhost') return true;
+  if (ip.startsWith('10.') || ip.startsWith('192.168.') || ip.startsWith('169.254.')) return true;
+  if (/^172\.(1[6-9]|2[0-9]|3[0-1])\./.test(ip)) return true;
+  const lower = ip.toLowerCase();
+  if (lower.startsWith('fc') || lower.startsWith('fd') || lower.startsWith('fe80:')) return true;
+  return false;
+}
+
+async function lookupLocation(rawIp) {
+  if (isPrivateIp(rawIp)) return null;
+  const ip = normalizeIp(rawIp) || String(rawIp).trim();
   const cached = geoCache.get(ip);
-  if (cached && Date.now() - cached.ts < GEO_CACHE_TTL) return cached.data;
+  const now = Date.now();
+  if (cached) {
+    const ttl = cached.data ? GEO_CACHE_TTL : GEO_NEGATIVE_TTL;
+    if (now - cached.ts < ttl) return cached.data;
+  }
   try {
-    const response = await fetch(`http://ip-api.com/json/${ip}?fields=status,country,regionName,city`);
+    const response = await fetch("http://ip-api.com/json/" + encodeURIComponent(ip) + "?fields=status,country,regionName,city", {
+      signal: AbortSignal.timeout(3000)
+    });
     const data = await response.json();
+    pruneGeoCache(now);
     if (data.status === 'success') {
       const location = { country: data.country, region: data.regionName, city: data.city };
-      geoCache.set(ip, { data: location, ts: Date.now() });
+      geoCache.set(ip, { data: location, ts: now });
       return location;
+    } else {
+      geoCache.set(ip, { data: null, ts: now });
+      return null;
     }
-  } catch {}
+  } catch {
+    pruneGeoCache(now);
+    geoCache.set(ip, { data: null, ts: now });
+  }
   return null;
+}
+
+function getStore(req, app) {
+  return req.sessionStore || app.get('sessionStore') || null;
+}
+
+function isNonSqliteProvider() {
+  const dbUrl = typeof settings.database === 'object' ? settings.database.url : settings.database;
+  return Boolean(
+    (process.env.DB_PROVIDER && process.env.DB_PROVIDER.toLowerCase() !== 'sqlite') ||
+    (typeof dbUrl === 'string' && (dbUrl.startsWith('postgresql://') || dbUrl.startsWith('postgres://')))
+  );
+}
+
+async function fetchActiveSessionRows(store, db, sessionsDbPath, now) {
+  if (store && store.db && typeof store.db.all === 'function') {
+    const table = store.table || 'sessions';
+    return new Promise((resolve, reject) => {
+      store.db.all("SELECT sid, expired, sess FROM " + table + " WHERE ? <= expired", [now], (err, rows) => {
+        if (err) return reject(err);
+        resolve(rows || []);
+      });
+    });
+  }
+
+  if (store && store.pool && typeof store.pool.query === 'function') {
+    try {
+      const table = typeof store.quotedTable === 'function' ? store.quotedTable() : (store.tableName ? '"' + store.tableName.replace(/"/g, '""') + '"' : '"session"');
+      const result = await store.pool.query("SELECT sid, expire as expired, sess FROM " + table + " WHERE expire > to_timestamp($1)", [now / 1000]);
+      return result.rows || [];
+    } catch (err) {
+      console.error('Failed to query sessions from PG pool:', err);
+    }
+  }
+
+  // PostgreSQL fallback via Prisma
+  if (db && typeof db.$queryRawUnsafe === 'function' && isNonSqliteProvider()) {
+    try {
+      const rows = await db.$queryRawUnsafe('SELECT sid, expire as expired, sess FROM "session" WHERE expire > NOW()');
+      return rows || [];
+    } catch {}
+  }
+
+  // If deployed on PostgreSQL or non-SQLite, avoid opening SQLite database
+  if (isNonSqliteProvider()) {
+    return [];
+  }
+
+  return new Promise((resolve, reject) => {
+    const conn = new sqlite3.Database(sessionsDbPath, sqlite3.OPEN_READONLY, (err) => {
+      if (err) return reject(err);
+      conn.all("SELECT sid, expired, sess FROM sessions WHERE ? <= expired", [now], (qErr, rows) => {
+        conn.close();
+        if (qErr) return reject(qErr);
+        resolve(rows || []);
+      });
+    });
+  });
+}
+
+async function fetchSingleSession(store, db, sessionsDbPath, sid) {
+  if (store && typeof store.get === 'function') {
+    return new Promise((resolve, reject) => {
+      store.get(sid, (err, sess) => {
+        if (err) return reject(err);
+        resolve(sess || null);
+      });
+    });
+  }
+
+  if (db && typeof db.$queryRawUnsafe === 'function' && isNonSqliteProvider()) {
+    try {
+      const rows = await db.$queryRawUnsafe('SELECT sess FROM "session" WHERE sid = $1', sid);
+      const row = rows && rows[0];
+      if (!row) return null;
+      return typeof row.sess === 'string' ? JSON.parse(row.sess) : row.sess;
+    } catch {}
+  }
+
+  if (isNonSqliteProvider()) {
+    return null;
+  }
+
+  return new Promise((resolve, reject) => {
+    const conn = new sqlite3.Database(sessionsDbPath, sqlite3.OPEN_READONLY, (err) => {
+      if (err) return reject(err);
+      conn.get("SELECT sess FROM sessions WHERE sid = ?", [sid], (qErr, row) => {
+        conn.close();
+        if (qErr) return reject(qErr);
+        if (!row) return resolve(null);
+        try { resolve(JSON.parse(row.sess)); } catch { resolve(null); }
+      });
+    });
+  });
+}
+
+async function deleteSessionRecord(store, db, sessionsDbPath, sid) {
+  if (store && typeof store.destroy === 'function') {
+    return new Promise((resolve, reject) => {
+      store.destroy(sid, (err) => {
+        if (err) return reject(err);
+        resolve();
+      });
+    });
+  }
+
+  if (db && typeof db.$executeRawUnsafe === 'function' && isNonSqliteProvider()) {
+    try {
+      await db.$executeRawUnsafe('DELETE FROM "session" WHERE sid = $1', sid);
+      return;
+    } catch {}
+  }
+
+  if (isNonSqliteProvider()) {
+    return;
+  }
+
+  return new Promise((resolve, reject) => {
+    const conn = new sqlite3.Database(sessionsDbPath, sqlite3.OPEN_READWRITE, (err) => {
+      if (err) return reject(err);
+      conn.run("DELETE FROM sessions WHERE sid = ?", [sid], (qErr) => {
+        conn.close();
+        if (qErr) return reject(qErr);
+        resolve();
+      });
+    });
+  });
 }
 
 module.exports.HeliactylModule = HeliactylModule;
 module.exports.load = async function (app, db) {
   const createAuthz = require('../handlers/authz');
   const authz = createAuthz(db);
-  const sessionsDbPath = path.join(__dirname, '..', 'sessions.db');
-
-  function openDb(mode) {
-    return new Promise((resolve, reject) => {
-      const conn = new sqlite3.Database(sessionsDbPath, mode, (err) => {
-        if (err) return reject(err);
-        resolve(conn);
-      });
-    });
-  }
+  const sessionDbName = (settings.session && typeof settings.session.db === 'string') ? settings.session.db : 'sessions.db';
+  const sessionsDbPath = path.isAbsolute(sessionDbName) ? sessionDbName : path.resolve(__dirname, '..', sessionDbName);
 
   app.get('/api/user/sessions', authz.requireSession, async (req, res) => {
     try {
       const userId = authz.getSessionUser(req).id;
       const currentSid = req.sessionID;
-      const conn = await openDb(sqlite3.OPEN_READONLY);
+      const store = getStore(req, app);
+      const now = Date.now();
 
-      const rows = await new Promise((resolve, reject) => {
-        conn.all('SELECT sid, expired, sess FROM sessions', (err, rows) => {
-          if (err) return reject(err);
-          resolve(rows || []);
-        });
+      await new Promise((resolve) => {
+        if (req.session && typeof req.session.save === 'function') {
+          req.session.save(resolve);
+        } else {
+          resolve();
+        }
       });
-      conn.close();
+
+      const rows = await fetchActiveSessionRows(store, db, sessionsDbPath, now);
 
       const sessions = [];
       for (const row of rows) {
         let sess;
-        try { sess = JSON.parse(row.sess); } catch { continue; }
-        if (!sess.userinfo || sess.userinfo.id !== userId) continue;
+        try {
+          sess = typeof row.sess === 'string' ? JSON.parse(row.sess) : row.sess;
+        } catch {
+          continue;
+        }
+        if (!sess || !sess.userinfo || sess.userinfo.id !== userId) continue;
 
         const isCurrent = row.sid === currentSid;
         const maxAge = sess.cookie?.originalMaxAge || 7 * 24 * 60 * 60 * 1000;
-        const lastActivity = row.expired - maxAge;
+        const expiredTime = row.expired instanceof Date ? row.expired.getTime() : Number(row.expired);
+        const lastActivity = sess.lastActivity || (expiredTime ? expiredTime - maxAge : null) || sess.createdAt || now;
 
         sessions.push({
           id: row.sid,
           isCurrent,
-          ip: sess.sessionIp || null,
-          userAgent: sess.userAgent || null,
-          createdAt: sess.createdAt || lastActivity || Date.now(),
-          lastActivity: lastActivity || Date.now(),
-          expiresAt: row.expired,
+          ip: sess.sessionIp || (isCurrent ? req.session.sessionIp : null),
+          userAgent: sess.userAgent || (isCurrent ? req.session.userAgent || req.headers['user-agent'] : null),
+          createdAt: sess.createdAt || lastActivity || now,
+          lastActivity: isCurrent ? (req.session.lastActivity || now) : lastActivity,
+          expiresAt: expiredTime,
+        });
+      }
+
+      if (!sessions.some((s) => s.isCurrent)) {
+        sessions.unshift({
+          id: currentSid,
+          isCurrent: true,
+          ip: req.session.sessionIp || null,
+          userAgent: req.session.userAgent || req.headers['user-agent'] || null,
+          createdAt: req.session.createdAt || now,
+          lastActivity: req.session.lastActivity || now,
+          expiresAt: req.session.cookie?.expires ? new Date(req.session.cookie.expires).getTime() : now + 7 * 86400000,
         });
       }
 
       sessions.sort((a, b) => {
         if (a.isCurrent) return -1;
         if (b.isCurrent) return 1;
-        return b.createdAt - a.createdAt;
+        return (b.lastActivity || b.createdAt || 0) - (a.lastActivity || a.createdAt || 0);
       });
 
-      await Promise.all(sessions.map(async (s) => {
-        if (s.ip) s.location = await lookupLocation(s.ip);
-      }));
+      const uniqueIps = [...new Set(sessions.map((s) => s.ip).filter(Boolean))];
+      const locationMap = new Map();
+
+      await Promise.all(
+        uniqueIps.map(async (ip) => {
+          locationMap.set(ip, await lookupLocation(ip));
+        })
+      );
+
+      for (const session of sessions) {
+        if (session.ip) {
+          session.location = locationMap.get(session.ip) || null;
+        }
+      }
 
       res.json({ sessions });
     } catch (error) {
@@ -103,41 +303,74 @@ module.exports.load = async function (app, db) {
     }
   });
 
+  const handleRevokeOthers = async (req, res) => {
+    try {
+      const userId = authz.getSessionUser(req).id;
+      const currentSid = req.sessionID;
+      const store = getStore(req, app);
+      const now = Date.now();
+
+      const rows = await fetchActiveSessionRows(store, db, sessionsDbPath, now);
+      let revokedCount = 0;
+
+      for (const row of rows) {
+        if (row.sid === currentSid) continue;
+        let sess;
+        try {
+          sess = typeof row.sess === 'string' ? JSON.parse(row.sess) : row.sess;
+        } catch {
+          continue;
+        }
+        if (sess && sess.userinfo && sess.userinfo.id === userId) {
+          await deleteSessionRecord(store, db, sessionsDbPath, row.sid);
+          revokedCount++;
+        }
+      }
+
+      try {
+        await db.notification.create({
+          data: {
+            userId,
+            action: 'user:sessions_revoked',
+            name: 'All other sessions disconnected'
+          }
+        });
+      } catch {}
+
+      res.json({
+        success: true,
+        revokedCount,
+        message: revokedCount + " other session" + (revokedCount !== 1 ? "s" : "") + " disconnected"
+      });
+    } catch (error) {
+      console.error('Error revoking other sessions:', error);
+      res.status(500).json({ error: 'Failed to revoke other sessions' });
+    }
+  };
+
+  // Register literal /others and /revoke-others BEFORE parameterized /:sid to prevent route conflicts
+  app.post('/api/user/sessions/revoke-others', authz.requireSession, handleRevokeOthers);
+  app.delete('/api/user/sessions/revoke-others', authz.requireSession, handleRevokeOthers);
+  app.delete('/api/user/sessions/others', authz.requireSession, handleRevokeOthers);
+
   app.delete('/api/user/sessions/:sid', authz.requireSession, async (req, res) => {
     try {
       const userId = authz.getSessionUser(req).id;
       const targetSid = req.params.sid;
       const currentSid = req.sessionID;
+      const store = getStore(req, app);
 
       if (targetSid === currentSid) {
         return res.status(400).json({ error: 'Cannot disconnect your current session. Use logout instead.' });
       }
 
-      const conn = await openDb(sqlite3.OPEN_READONLY);
-      const row = await new Promise((resolve, reject) => {
-        conn.get('SELECT sess FROM sessions WHERE sid = ?', [targetSid], (err, row) => {
-          if (err) return reject(err);
-          resolve(row);
-        });
-      });
-      conn.close();
-
-      if (!row) return res.status(404).json({ error: 'Session not found' });
-
-      let sess;
-      try { sess = JSON.parse(row.sess); } catch { return res.status(404).json({ error: 'Session not found' }); }
+      const sess = await fetchSingleSession(store, db, sessionsDbPath, targetSid);
+      if (!sess) return res.status(404).json({ error: 'Session not found' });
       if (!sess.userinfo || sess.userinfo.id !== userId) {
         return res.status(403).json({ error: 'Not your session' });
       }
 
-      const writeConn = await openDb(sqlite3.OPEN_READWRITE);
-      await new Promise((resolve, reject) => {
-        writeConn.run('DELETE FROM sessions WHERE sid = ?', [targetSid], (err) => {
-          if (err) return reject(err);
-          resolve();
-        });
-      });
-      writeConn.close();
+      await deleteSessionRecord(store, db, sessionsDbPath, targetSid);
 
       try {
         await db.notification.create({

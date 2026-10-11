@@ -8,7 +8,7 @@
 # Heliactyl Release Information
 # ---------------------------------
 platform_codename = "Toledo"
-platform_level = 425 # channel: development - 09-10-2026 (Toledo)
+platform_level = 426 # channel: development - 11-10-2026 (Toledo)
 version = "10.0.0"
 
 # ---------------------------------
@@ -16,6 +16,11 @@ version = "10.0.0"
 # ---------------------------------
 database = "heliactyl.db"
 
+# ---------------------------------
+# Session Configuration (Optional)
+# ---------------------------------
+# [session]
+# db = "sessions.db" # Custom SQLite database file name for session storage (default: "sessions.db")
 # ---------------------------------
 # Webserver Configuration
 # ---------------------------------

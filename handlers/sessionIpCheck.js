@@ -53,6 +53,17 @@ function createSessionIpCheck() {
       return next();
     }
 
+    if (!req.session.userAgent && req.headers['user-agent']) {
+      req.session.userAgent = req.headers['user-agent'];
+    }
+    if (!req.session.createdAt) {
+      req.session.createdAt = Date.now();
+    }
+    const now = Date.now();
+    if (!req.session.lastActivity || now - req.session.lastActivity > 60000) {
+      req.session.lastActivity = now;
+    }
+
     // Check if IP changed to an entirely different network / subnet
     if (!areIpsEquivalent(req.session.sessionIp, currentIp)) {
       if (req.session.vpnBypassed === undefined) {
