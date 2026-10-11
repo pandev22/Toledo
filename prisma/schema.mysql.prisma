@@ -369,6 +369,7 @@ model NodeConfig {
   disk               Int      @default(0)
   allocatedResources String   @default("{}") @db.LongText
   enabled            Boolean  @default(true)
+  goldOnly           Boolean  @default(false)
   lastSyncedAt       DateTime?
 
   location LocationConfig @relation(fields: [locationId], references: [id], onDelete: Cascade)

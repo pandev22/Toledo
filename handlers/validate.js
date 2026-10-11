@@ -321,7 +321,8 @@ const schemas = {
   }),
 
   nodeConfigUpdate: z.object({
-    enabled: z.boolean().optional()
+    enabled: z.boolean().optional(),
+    goldOnly: z.boolean().optional()
   }),
 
   // Boost management

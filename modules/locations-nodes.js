@@ -99,6 +99,7 @@ async function getNodesFromDB(db) {
     disk: node.disk,
     allocated_resources: safeJsonParse(node.allocatedResources, {}),
     enabled: node.enabled,
+    goldOnly: Boolean(node.goldOnly),
     lastSyncedAt: node.lastSyncedAt?.toISOString() || null
   }));
 }
@@ -156,6 +157,7 @@ async function syncLocationsAndNodes(db) {
         disk: node.attributes.disk || 0,
         allocatedResources: JSON.stringify(node.attributes.allocated_resources || {}),
         enabled: existing?.enabled ?? true,
+        goldOnly: existing?.goldOnly ?? false,
         lastSyncedAt: syncedAt
       };
     });
@@ -187,6 +189,7 @@ async function syncLocationsAndNodes(db) {
         disk: node.disk,
         allocatedResources: node.allocatedResources,
         enabled: node.enabled,
+        goldOnly: node.goldOnly,
         lastSyncedAt: node.lastSyncedAt
       },
       create: node
@@ -395,14 +398,18 @@ module.exports.load = async function (app, db) {
         return res.status(404).json({ error: 'Node not found' });
       }
 
+      const updates = {};
+      if (req.body.enabled !== undefined) updates.enabled = req.body.enabled;
+      if (req.body.goldOnly !== undefined) updates.goldOnly = req.body.goldOnly;
+
       const node = await db.nodeConfig.update({
         where: { id: nodeId },
-        data: {
-          enabled: req.body.enabled !== undefined ? req.body.enabled : existing.enabled
-        }
+        data: updates
       });
 
-      res.json({ success: true, enabled: node.enabled });
+      log('node_updated', `${req.session.userinfo.username} updated node ${node.name} (enabled: ${node.enabled}, goldOnly: ${node.goldOnly})`);
+
+      res.json({ success: true, enabled: node.enabled, goldOnly: node.goldOnly });
     } catch (error) {
       console.error('Error updating node:', error);
       res.status(500).json({ error: 'Failed to update node' });
@@ -427,10 +434,37 @@ module.exports.load = async function (app, db) {
         data: { enabled: !existing.enabled }
       });
 
-      res.json({ success: true, enabled: node.enabled });
+      res.json({ success: true, enabled: node.enabled, goldOnly: node.goldOnly });
     } catch (error) {
       console.error('Error toggling node:', error);
       res.status(500).json({ error: 'Failed to toggle node' });
+    }
+  });
+
+  router.patch('/admin/nodes/:id/toggle-gold', async (req, res) => {
+    if (!await checkAdminStatus(req, res, db)) {
+      return res.status(403).json({ error: 'Unauthorized' });
+    }
+
+    try {
+      const nodeId = req.params.id;
+      const existing = await db.nodeConfig.findUnique({ where: { id: nodeId } });
+
+      if (!existing) {
+        return res.status(404).json({ error: 'Node not found' });
+      }
+
+      const node = await db.nodeConfig.update({
+        where: { id: nodeId },
+        data: { goldOnly: !existing.goldOnly }
+      });
+
+      log('node_gold_only_toggled', `${req.session.userinfo.username} set Gold Only to ${node.goldOnly} on node ${node.name}`);
+
+      res.json({ success: true, goldOnly: node.goldOnly, enabled: node.enabled });
+    } catch (error) {
+      console.error('Error toggling node gold only status:', error);
+      res.status(500).json({ error: 'Failed to toggle node gold only status' });
     }
   });
 

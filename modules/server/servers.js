@@ -298,7 +298,8 @@ module.exports.load = async function (app, db) {
                     fqdn: node.fqdn,
                     memory: node.memory,
                     disk: node.disk,
-                    allocated_resources: node.allocated_resources
+                    allocated_resources: node.allocated_resources,
+                    goldOnly: Boolean(node.goldOnly)
                 }));
 
             res.json(nodes);
@@ -542,6 +543,23 @@ module.exports.load = async function (app, db) {
 
                 if (!selectedNode || !selectedNode.enabled) {
                     return res.status(400).json({ error: 'This node is not available' });
+                }
+
+                if (selectedNode.goldOnly) {
+                    const hasGodPack = await db.userPack.findFirst({
+                        where: {
+                            userId: sessionUser.id,
+                            type: 'god_pack',
+                            status: 'active',
+                            expiresAt: { gt: new Date() }
+                        }
+                    });
+
+                    if (!hasGodPack) {
+                        return res.status(403).json({
+                            error: 'This node is reserved for God Pack subscribers only'
+                        });
+                    }
                 }
 
                 const selectedLocation = locations.find((entry) => entry.id.toString() === selectedNode.locationId?.toString());
