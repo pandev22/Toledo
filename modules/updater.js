@@ -6,7 +6,6 @@ const https = require("https");
 const { exec } = require("child_process");
 const { promisify } = require("util");
 const execAsync = promisify(exec);
-const axios = require("axios");
 const loadConfig = require("../handlers/config.js");
 const createLogger = require("../handlers/console.js");
 const createAuthz = require('../handlers/authz');
@@ -14,33 +13,22 @@ const createAuthz = require('../handlers/authz');
 const settings = loadConfig("./config.toml");
 const logger = createLogger();
 
-// Pterodactyl API helper
-const pteroApi = axios.create({
-  baseURL: settings.pterodactyl.domain,
-  headers: {
-    'Content-Type': 'application/json',
-    'Authorization': `Bearer ${settings.pterodactyl.key}`
-  }
-});
-
 // Check admin status utility function
 async function checkAdminStatus(req, res, db, requiredPerm = 'admin.updater.manage') {
   const authz = createAuthz(db);
   return authz.hasPermission(req, requiredPerm);
 }
 
-
-  const HeliactylModule = {
+const HeliactylModule = {
   name: "Updater",
-
-  version: "1.1.0",
+  version: "1.2.0",
   api_level: 4,
   target_platform: "10.0.0",
-  description: "Auto-update system — DB-based config, admin UI, per-server tracking",
-  "author": {
-    "name": "aachul123",
-    "email": "ludo@overnode.fr",
-    "url": "https://achul123.pages.dev/"
+  description: "Auto-update system - DB-based config, admin UI, release checking & automated updates",
+  author: {
+    name: "aachul123",
+    email: "ludo@overnode.fr",
+    url: "https://achul123.pages.dev/"
   },
   dependencies: [],
   permissions: [],
@@ -64,9 +52,10 @@ const DEFAULT_CONFIG = {
   maxBackups: 3
 };
 
-// Files/dirs to never overwrite during server/ updates
+// Files/dirs to never overwrite during server updates
 const SERVER_EXCLUDE = new Set([
   "config.toml",
+  ".env",
   "heliactyl.db",
   "heliactyl.db-shm",
   "heliactyl.db-wal",
@@ -78,7 +67,7 @@ const SERVER_EXCLUDE = new Set([
   ".git"
 ]);
 
-// Files/dirs to never overwrite during frontend/ updates
+// Files/dirs to never overwrite during frontend updates
 const FRONTEND_EXCLUDE = new Set([
   "node_modules",
   "dist",
@@ -104,7 +93,6 @@ function sanitizeGitTag(tag) {
     throw new Error("Tag must be a non-empty string");
   }
   
-  // Allow only: alphanumeric, dots, hyphens, underscores, 'v' prefix
   if (!/^[a-zA-Z0-9._\-v]+$/.test(tag)) {
     throw new Error(`Invalid tag name: "${tag}". Only alphanumeric, dots, hyphens, underscores, and 'v' prefix allowed`);
   }
@@ -138,26 +126,15 @@ class UpdateManager {
       logger.warn("Could not clean temp_update directory:", error.message);
     }
 
-    // Clean up old backup directories that might be orphaned (optional)
-    try {
-      const entries = await fs.readdir(this.serverDir).catch(() => []);
-      const orphanedBackups = entries.filter(e => e.startsWith("backup_"));
-      
-      if (orphanedBackups.length > 0) {
-        logger.info(`Found ${orphanedBackups.length} backup directory(ies) from potential failed updates`);
-        // Note: We don't auto-delete these as they may be intentional backups.
-        // The cleanOldBackups method will manage them based on maxBackups config.
-      }
-    } catch (error) {
-      logger.warn("Could not check for orphaned backups:", error.message);
-    }
-
     const config = await this.getConfig();
     logger.info(`Auto-updater initialized (v${this.currentVersion}, enabled: ${config.enabled})`);
 
     if (config.enabled) {
-      setTimeout(() => this.checkForUpdates(), 10_000);
-      setInterval(() => this.checkForUpdates(), config.checkInterval * 60 * 1000);
+      const initialTimer = setTimeout(() => this.checkForUpdates(), 10_000);
+      if (typeof initialTimer.unref === "function") initialTimer.unref();
+
+      const intervalTimer = setInterval(() => this.checkForUpdates(), config.checkInterval * 60 * 1000);
+      if (typeof intervalTimer.unref === "function") intervalTimer.unref();
     }
 
     this.setupRoutes(app);
@@ -202,7 +179,6 @@ class UpdateManager {
         const { enabled, checkInterval, webhookSecret, maxBackups } = req.body;
         const current = await this.getConfig();
 
-        // Validate checkInterval
         if (checkInterval !== undefined) {
           const interval = parseInt(checkInterval);
           if (isNaN(interval) || interval < 5) {
@@ -210,7 +186,6 @@ class UpdateManager {
           }
         }
 
-        // Validate maxBackups
         if (maxBackups !== undefined) {
           const backups = parseInt(maxBackups);
           if (isNaN(backups) || backups < 1) {
@@ -249,14 +224,17 @@ class UpdateManager {
           currentVersion: this.currentVersion,
           latestVersion: latest,
           upToDate: this.currentVersion === latest,
-          updating: this.updating
+          updating: this.updating,
+          releaseUrl: release?.html_url || null,
+          releaseNotes: release?.body || null
         });
-      } catch {
+      } catch (err) {
         res.json({
           currentVersion: this.currentVersion,
           latestVersion: "unknown",
           upToDate: false,
-          updating: this.updating
+          updating: this.updating,
+          error: err.message || "Could not reach GitHub"
         });
       }
     });
@@ -305,13 +283,13 @@ class UpdateManager {
       const latestVersion = release.tag_name.replace(/^v/, "");
 
       if (this.currentVersion !== latestVersion) {
-        logger.info(`Update available: ${this.currentVersion} → ${latestVersion}`);
+        logger.info(`Update available: ${this.currentVersion} -> ${latestVersion}`);
         await this.performUpdate(release);
       } else {
         logger.info(`Up to date (v${this.currentVersion})`);
       }
     } catch (error) {
-      logger.error("Update check failed:", error);
+      logger.error("Update check failed:", error.message || error);
     }
   }
 
@@ -322,14 +300,26 @@ class UpdateManager {
         "Accept": "application/vnd.github.v3+json"
       };
 
-      https.get(this.githubApiUrl, { headers }, (res) => {
+      const req = https.get(this.githubApiUrl, { headers, timeout: 15_000 }, (res) => {
+        if (res.statusCode === 404) {
+          return resolve({ tag_name: this.currentVersion, html_url: null, body: "No releases published yet." });
+        }
+        if (res.statusCode !== 200) {
+          return reject(new Error(`GitHub API responded with status code ${res.statusCode}`));
+        }
         let data = "";
         res.on("data", (chunk) => (data += chunk));
         res.on("end", () => {
           try { resolve(JSON.parse(data)); }
           catch (e) { reject(e); }
         });
-      }).on("error", reject);
+      });
+
+      req.on("timeout", () => {
+        req.destroy();
+        reject(new Error("GitHub API request timed out"));
+      });
+      req.on("error", reject);
     });
   }
 
@@ -358,26 +348,33 @@ class UpdateManager {
 
       logger.info(`Downloading ${tag}...`);
       const cloneUrl = `https://github.com/${this.repo}.git`;
-      await execAsync(`git clone --depth 1 --branch ${tag} ${cloneUrl} "${tempDir}"`, { timeout: 120_000 });
+      await execAsync(`git clone --depth 1 --recurse-submodules --shallow-submodules --branch ${tag} ${cloneUrl} "${tempDir}"`, { timeout: 180_000 });
 
       logger.info("Backing up current files...");
       await fs.mkdir(backupDir, { recursive: true });
       await this.copyFiltered(this.serverDir, path.join(backupDir, "server"), SERVER_EXCLUDE);
       await this.copyFiltered(this.frontendDir, path.join(backupDir, "frontend"), FRONTEND_EXCLUDE);
 
+      const clonedServerDir = await fs.access(path.join(tempDir, "server-toledo")).then(() => path.join(tempDir, "server-toledo")).catch(() => path.join(tempDir, "server"));
+
       logger.info("Applying server update...");
-      await this.applyUpdate(path.join(tempDir, "server"), this.serverDir, SERVER_EXCLUDE);
+      await this.applyUpdate(clonedServerDir, this.serverDir, SERVER_EXCLUDE);
 
       logger.info("Applying frontend update...");
       await this.applyUpdate(path.join(tempDir, "frontend"), this.frontendDir, FRONTEND_EXCLUDE);
 
       await fs.rm(tempDir, { recursive: true, force: true });
 
-      logger.info("Installing server dependencies...");
-      await execAsync("npm install --production", { cwd: this.serverDir, timeout: 120_000 });
+      logger.info("Installing server dependencies & running Prisma migrations...");
+      const serverInstallCmd = "command -v pnpm >/dev/null 2>&1 && pnpm install || npm install";
+      await execAsync(serverInstallCmd, { cwd: this.serverDir, timeout: 120_000 });
+      const isMysql = (process.env.DB_PROVIDER || "").toLowerCase() === "mysql";
+      const pushCommand = isMysql ? "npm run prisma:push:mysql" : "npm run prisma:push:sqlite";
+      await execAsync(`npm run prisma:generate && (${pushCommand} || npm run prisma:push)`, { cwd: this.serverDir, timeout: 120_000 });
 
       logger.info("Installing frontend dependencies & building...");
-      await execAsync("npm install && npm run build", { cwd: this.frontendDir, timeout: 300_000 });
+      const frontendCmd = "command -v pnpm >/dev/null 2>&1 && (pnpm install && pnpm build) || (npm install && npm run build)";
+      await execAsync(frontendCmd, { cwd: this.frontendDir, timeout: 300_000 });
 
       await this.updateConfigVersion(tag.replace(/^v/, ""));
       await this.cleanOldBackups(config.maxBackups);
@@ -477,7 +474,7 @@ class UpdateManager {
   }
 
   restart() {
-    logger.info("Killing process — PM2 will restart with updated code");
+    logger.info("Killing process - PM2 will restart with updated code");
     if (global.server) {
       global.server.close(() => process.exit(0));
     } else {
@@ -491,3 +488,4 @@ module.exports.load = async function (app, db) {
   const updater = new UpdateManager(db);
   await updater.init(app);
 };
+
