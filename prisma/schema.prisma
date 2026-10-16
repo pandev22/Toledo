@@ -391,6 +391,7 @@ model NodeConfig {
   disk              Int     @default(0)
   allocatedResources String @default("{}") // JSON object
   enabled           Boolean @default(true)
+  goldOnly          Boolean @default(false)
   lastSyncedAt      DateTime?
 
   location LocationConfig @relation(fields: [locationId], references: [id], onDelete: Cascade)
